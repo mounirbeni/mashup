@@ -1,21 +1,21 @@
 <!doctype html>
-<html lang="ar" dir="rtl">
+<html lang="en" dir="ltr">
 <head>
 <meta charset="utf-8">
-<title>مزج — Mashup</title>
+<title>Mashup</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="theme-color" content="#121014">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="مزج">
+<meta name="apple-mobile-web-app-title" content="Mashup">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Readex+Pro:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Readex+Pro:wght@500;600;700&display=swap">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -34,7 +34,7 @@
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.9" fill="currentColor"/><circle cx="12" cy="12" r="1.9" fill="currentColor"/><circle cx="19" cy="12" r="1.9" fill="currentColor"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="i-back" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-queue" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M17 15.5v5l4-2.5z" fill="currentColor"/></symbol>
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h2M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
@@ -51,37 +51,37 @@
     <!-- ===== Library ===== -->
     <section class="view" id="view-library" data-view="library">
       <header class="view-head">
-        <h1 class="big-title">مكتبتي</h1>
+        <h1 class="big-title">Library</h1>
         <div class="head-actions">
-          <button class="icon-btn" id="btn-settings" aria-label="الإعدادات"><svg><use href="#i-gear"/></svg></button>
-          <button class="icon-btn accent" id="btn-add" aria-label="إضافة موسيقى"><svg><use href="#i-plus"/></svg></button>
+          <button class="icon-btn" id="btn-settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+          <button class="icon-btn accent" id="btn-add" aria-label="Add music"><svg><use href="#i-plus"/></svg></button>
         </div>
       </header>
       <div class="segmented" role="tablist" id="lib-seg">
-        <button role="tab" data-seg="songs" aria-selected="true">الأغاني</button>
-        <button role="tab" data-seg="albums" aria-selected="false">الألبومات</button>
-        <button role="tab" data-seg="artists" aria-selected="false">الفنانون</button>
+        <button role="tab" data-seg="songs" aria-selected="true">Songs</button>
+        <button role="tab" data-seg="albums" aria-selected="false">Albums</button>
+        <button role="tab" data-seg="artists" aria-selected="false">Artists</button>
       </div>
       <div class="lib-tools" id="lib-tools">
-        <button class="pill-btn" id="btn-play-all"><svg><use href="#i-play"/></svg>تشغيل</button>
-        <button class="pill-btn" id="btn-shuffle-all"><svg><use href="#i-shuffle"/></svg>عشوائي</button>
+        <button class="pill-btn" id="btn-play-all"><svg><use href="#i-play"/></svg>Play</button>
+        <button class="pill-btn" id="btn-shuffle-all"><svg><use href="#i-shuffle"/></svg>Shuffle</button>
       </div>
       <div id="lib-content"></div>
       <div class="empty" id="lib-empty" hidden>
         <div class="empty-art"><svg><use href="#i-note"/></svg></div>
-        <h2>مكتبتك فارغة</h2>
-        <p>أضف ملفات صوتية من هاتفك (MP3، M4A، WAV، FLAC…) لتبدأ. الملفات تبقى محفوظة على جهازك فقط.</p>
-        <button class="primary-btn" id="btn-add-empty"><svg><use href="#i-plus"/></svg>إضافة موسيقى</button>
-        <button class="ghost-btn" id="btn-demo">جرّب بمقاطع تجريبية للمزج</button>
+        <h2>Your library is empty</h2>
+        <p>Add audio files from your phone (MP3, M4A, WAV, FLAC…) to get started. Your files stay on this device only.</p>
+        <button class="primary-btn" id="btn-add-empty"><svg><use href="#i-plus"/></svg>Add Music</button>
+        <button class="ghost-btn" id="btn-demo">Try it with demo tracks</button>
       </div>
     </section>
 
     <!-- ===== Playlists ===== -->
     <section class="view" id="view-playlists" data-view="playlists" hidden>
       <header class="view-head">
-        <h1 class="big-title">القوائم</h1>
+        <h1 class="big-title">Playlists</h1>
         <div class="head-actions">
-          <button class="icon-btn accent" id="btn-new-pl" aria-label="قائمة جديدة"><svg><use href="#i-plus"/></svg></button>
+          <button class="icon-btn accent" id="btn-new-pl" aria-label="New playlist"><svg><use href="#i-plus"/></svg></button>
         </div>
       </header>
       <div id="pl-content"></div>
@@ -90,28 +90,28 @@
     <!-- ===== Playlist detail ===== -->
     <section class="view" id="view-playlist" data-view="playlist" hidden>
       <header class="sub-head">
-        <button class="back-btn" id="pl-back"><svg><use href="#i-back"/></svg>القوائم</button>
-        <button class="icon-btn" id="pl-more" aria-label="خيارات القائمة"><svg><use href="#i-more"/></svg></button>
+        <button class="back-btn" id="pl-back"><svg><use href="#i-back"/></svg>Playlists</button>
+        <button class="icon-btn" id="pl-more" aria-label="Playlist options"><svg><use href="#i-more"/></svg></button>
       </header>
       <div class="pl-hero">
         <div class="pl-cover" id="pl-cover"></div>
         <h1 class="pl-name" id="pl-name"></h1>
         <p class="pl-meta" id="pl-meta"></p>
         <div class="lib-tools center">
-          <button class="pill-btn" id="pl-play"><svg><use href="#i-play"/></svg>تشغيل</button>
-          <button class="pill-btn" id="pl-mix"><svg><use href="#i-mixer"/></svg>مزج تلقائي</button>
+          <button class="pill-btn" id="pl-play"><svg><use href="#i-play"/></svg>Play</button>
+          <button class="pill-btn" id="pl-mix"><svg><use href="#i-mixer"/></svg>Auto-Mix</button>
         </div>
       </div>
       <div id="pl-tracks"></div>
-      <button class="ghost-btn wide" id="pl-add-songs"><svg><use href="#i-plus"/></svg>إضافة أغانٍ</button>
+      <button class="ghost-btn wide" id="pl-add-songs"><svg><use href="#i-plus"/></svg>Add Songs</button>
     </section>
 
     <!-- ===== Mixer ===== -->
     <section class="view" id="view-mixer" data-view="mixer" hidden>
       <header class="view-head">
-        <h1 class="big-title">الميكسر</h1>
+        <h1 class="big-title">Mixer</h1>
         <div class="head-actions">
-          <button class="chip-toggle" id="mx-automix" aria-pressed="true"><svg><use href="#i-wave"/></svg>مزج تلقائي</button>
+          <button class="chip-toggle" id="mx-automix" aria-pressed="true"><svg><use href="#i-wave"/></svg>Auto-Mix</button>
         </div>
       </header>
       <div class="mixer" dir="ltr">
@@ -120,25 +120,25 @@
           <div class="deck" id="deck-B" data-deck="B"></div>
         </div>
         <div class="xfader-wrap">
-          <div class="xf-labels"><span>A</span><button class="mini-chip" id="xf-center">وسط</button><span>B</span></div>
-          <input type="range" class="xfader" id="xfader" min="0" max="1000" value="0" aria-label="الكروس فيدر">
-          <div class="xf-actions" dir="rtl">
-            <button class="action-chip" id="mx-mix-now"><svg><use href="#i-sync"/></svg>امزج الآن إلى الطرف الآخر</button>
+          <div class="xf-labels"><span>A</span><button class="mini-chip" id="xf-center">Center</button><span>B</span></div>
+          <input type="range" class="xfader" id="xfader" min="0" max="1000" value="0" aria-label="Crossfader">
+          <div class="xf-actions">
+            <button class="action-chip" id="mx-mix-now"><svg><use href="#i-sync"/></svg>Mix to the Other Deck Now</button>
           </div>
         </div>
-        <div class="master" dir="rtl">
+        <div class="master">
           <canvas id="mx-scope" height="56" aria-hidden="true"></canvas>
-          <p class="hint" id="mx-hint">حمّل أغنية على كل طرف من قائمة "⋯" أو اضغط على اسم الطرف. حرّك الكروس فيدر للمزج يدوياً، أو فعّل المزج التلقائي ليمزج الأغاني تلقائياً عند نهاية كل أغنية.</p>
+          <p class="hint" id="mx-hint">Load a song onto each deck from the “⋯” menu or by tapping the deck title. Move the crossfader to mix by hand, or turn on Auto-Mix to blend songs automatically as each one ends.</p>
         </div>
       </div>
     </section>
 
     <!-- ===== Search ===== -->
     <section class="view" id="view-search" data-view="search" hidden>
-      <header class="view-head"><h1 class="big-title">بحث</h1></header>
+      <header class="view-head"><h1 class="big-title">Search</h1></header>
       <label class="search-box">
         <svg><use href="#i-search"/></svg>
-        <input type="search" id="search-input" placeholder="أغانٍ، فنانون، ألبومات" autocomplete="off">
+        <input type="search" id="search-input" placeholder="Songs, artists, albums" autocomplete="off">
       </label>
       <div id="search-results"></div>
     </section>
@@ -146,31 +146,31 @@
 
   <!-- ===== Mini player ===== -->
   <div class="mini" id="mini" hidden>
-    <button class="mini-main" id="mini-open" aria-label="فتح المشغّل">
+    <button class="mini-main" id="mini-open" aria-label="Open player">
       <div class="art sm" id="mini-art"></div>
       <div class="mini-text">
         <span class="t1" id="mini-title"></span>
         <span class="t2" id="mini-artist"></span>
       </div>
     </button>
-    <button class="icon-btn" id="mini-play" aria-label="تشغيل/إيقاف"><svg><use href="#i-play"/></svg></button>
-    <button class="icon-btn" id="mini-next" aria-label="التالي"><svg><use href="#i-next"/></svg></button>
+    <button class="icon-btn" id="mini-play" aria-label="Play/Pause"><svg><use href="#i-play"/></svg></button>
+    <button class="icon-btn" id="mini-next" aria-label="Next"><svg><use href="#i-next"/></svg></button>
     <div class="mini-progress"><i id="mini-bar"></i></div>
   </div>
 
   <!-- ===== Tab bar ===== -->
   <nav class="tabbar" id="tabbar">
-    <button data-tab="library" aria-current="page"><svg><use href="#i-library"/></svg><span>مكتبتي</span></button>
-    <button data-tab="playlists"><svg><use href="#i-list"/></svg><span>القوائم</span></button>
-    <button data-tab="mixer"><svg><use href="#i-mixer"/></svg><span>الميكسر</span></button>
-    <button data-tab="search"><svg><use href="#i-search"/></svg><span>بحث</span></button>
+    <button data-tab="library" aria-current="page"><svg><use href="#i-library"/></svg><span>Library</span></button>
+    <button data-tab="playlists"><svg><use href="#i-list"/></svg><span>Playlists</span></button>
+    <button data-tab="mixer"><svg><use href="#i-mixer"/></svg><span>Mixer</span></button>
+    <button data-tab="search"><svg><use href="#i-search"/></svg><span>Search</span></button>
   </nav>
 
   <!-- ===== Now playing ===== -->
   <div class="np" id="np" aria-hidden="true">
     <div class="np-bg" id="np-bg"></div>
     <div class="np-inner">
-      <button class="np-grab" id="np-close" aria-label="إغلاق"><span></span></button>
+      <button class="np-grab" id="np-close" aria-label="Close"><span></span></button>
       <div class="np-stage">
         <div class="art xl" id="np-art"></div>
         <canvas class="np-viz" id="np-viz" hidden></canvas>
@@ -180,28 +180,28 @@
           <h2 id="np-title">—</h2>
           <p id="np-artist"></p>
         </div>
-        <button class="icon-btn round" id="np-more" aria-label="خيارات"><svg><use href="#i-more"/></svg></button>
+        <button class="icon-btn round" id="np-more" aria-label="More"><svg><use href="#i-more"/></svg></button>
       </div>
       <div class="np-progress" dir="ltr">
-        <input type="range" id="np-seek" min="0" max="1000" value="0" aria-label="موضع التشغيل">
-        <div class="np-times"><span id="np-cur">0:00</span><span class="np-mixbadge" id="np-mixbadge" hidden>يمزج…</span><span id="np-rem">-0:00</span></div>
+        <input type="range" id="np-seek" min="0" max="1000" value="0" aria-label="Playback position">
+        <div class="np-times"><span id="np-cur">0:00</span><span class="np-mixbadge" id="np-mixbadge" hidden>Mixing…</span><span id="np-rem">-0:00</span></div>
       </div>
       <div class="np-controls" dir="ltr">
-        <button class="ctl" id="np-shuffle" aria-label="عشوائي" aria-pressed="false"><svg><use href="#i-shuffle"/></svg></button>
-        <button class="ctl big" id="np-prev" aria-label="السابق"><svg><use href="#i-prev"/></svg></button>
-        <button class="ctl huge" id="np-play" aria-label="تشغيل/إيقاف"><svg><use href="#i-play"/></svg></button>
-        <button class="ctl big" id="np-next" aria-label="التالي"><svg><use href="#i-next"/></svg></button>
-        <button class="ctl" id="np-repeat" aria-label="تكرار" aria-pressed="false"><svg><use href="#i-repeat"/></svg><b id="np-rep1" hidden>1</b></button>
+        <button class="ctl" id="np-shuffle" aria-label="Shuffle" aria-pressed="false"><svg><use href="#i-shuffle"/></svg></button>
+        <button class="ctl big" id="np-prev" aria-label="Previous"><svg><use href="#i-prev"/></svg></button>
+        <button class="ctl huge" id="np-play" aria-label="Play/Pause"><svg><use href="#i-play"/></svg></button>
+        <button class="ctl big" id="np-next" aria-label="Next"><svg><use href="#i-next"/></svg></button>
+        <button class="ctl" id="np-repeat" aria-label="Repeat" aria-pressed="false"><svg><use href="#i-repeat"/></svg><b id="np-rep1" hidden>1</b></button>
       </div>
       <div class="np-volume" dir="ltr">
         <svg><use href="#i-vol-lo"/></svg>
-        <input type="range" id="np-vol" min="0" max="100" value="100" aria-label="مستوى الصوت">
+        <input type="range" id="np-vol" min="0" max="100" value="100" aria-label="Volume">
         <svg><use href="#i-vol-hi"/></svg>
       </div>
       <div class="np-bottom">
-        <button class="np-tool" id="np-viz-btn" aria-pressed="false"><svg><use href="#i-wave"/></svg><span>مؤثر بصري</span></button>
-        <button class="np-tool" id="np-xf-btn"><svg><use href="#i-mixer"/></svg><span id="np-xf-label">مزج ٦ ث</span></button>
-        <button class="np-tool" id="np-queue-btn"><svg><use href="#i-queue"/></svg><span>التالي</span></button>
+        <button class="np-tool" id="np-viz-btn" aria-pressed="false"><svg><use href="#i-wave"/></svg><span>Visualizer</span></button>
+        <button class="np-tool" id="np-xf-btn"><svg><use href="#i-mixer"/></svg><span id="np-xf-label">Mix 6s</span></button>
+        <button class="np-tool" id="np-queue-btn"><svg><use href="#i-queue"/></svg><span>Up Next</span></button>
       </div>
     </div>
   </div>

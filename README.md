@@ -1,56 +1,50 @@
-# مزج — Mashup
+# Mashup
 
-مشغّل موسيقى للهاتف بأسلوب تطبيقات الموسيقى الحديثة، مع **ميكسر DJ بطرفين** و**مزج تلقائي** بين الأغاني. يعمل بالكامل داخل المتصفح، ويمكن تثبيته على الشاشة الرئيسية كتطبيق (PWA).
+A phone-first music player in the style of modern music apps, with a **two-deck DJ mixer** and **automatic mixing** between songs. It runs entirely in the browser and can be installed to your home screen as an app (PWA).
 
-## المزايا
+## Features
 
-**المشغّل**
-- مكتبة مقسّمة إلى أغانٍ وألبومات وفنانين، مع بحث وقوائم تشغيل
-- شاشة "يُشغَّل الآن" بخلفية تأخذ لونها من غلاف الأغنية، ومؤثر بصري يتفاعل مع الصوت
-- تشغيل عشوائي، وتكرار (الكل / أغنية واحدة)، وقائمة انتظار ("تشغيل التالي")
-- أزرار التحكم تظهر على شاشة القفل وتعمل مع السماعات (Media Session)
-- قراءة بيانات ملفات MP3 (ID3): العنوان والفنان والألبوم والغلاف، بما فيها النصوص العربية المخزّنة بترميز Windows‑1256
+**Player**
+- Library by songs, albums and artists, with search and playlists
+- Now Playing screen tinted from the album art, plus an audio-reactive visualizer
+- Shuffle, repeat (all / one), and an Up Next queue with "Play Next"
+- Lock-screen and headphone controls (Media Session)
+- Reads MP3 tags (ID3): title, artist, album and cover art, including Arabic text stored as Windows-1256
 
-**المزج (Mixing)**
-- **مزج تلقائي:** تبدأ الأغنية التالية قبل نهاية الحالية، وتتداخلان لمدة بين 0 و12 ثانية
-- **مزج ذكي:** يكشف سرعة الإيقاع (BPM) تلقائياً، ويطابق السرعة ويحاذي الضربات، ويبدّل الباس في منتصف المزج
-- **ميكسر بطرفين (A / B):** لكل طرف شكل موجي يمكن الضغط عليه للانتقال داخل الأغنية، و CUE، و SYNC، ومعادل صوت بثلاث نطاقات (HI / MID / LOW)، وفلتر تمرير منخفض/مرتفع، وسرعة ±16% مع تثبيت طبقة الصوت، ومستوى صوت لكل طرف
-- **كروس فيدر** بمنحنى قدرة متساوية (equal-power)، وزر "امزج الآن"
-- مقاطع تجريبية مولّدة داخل التطبيق (122 و124 و126 BPM) لتجربة المزج بدون ملفات
+**Mixing**
+- **Auto-Mix:** the next song starts before the current one ends, overlapping for 0–12 seconds
+- **Smart Mix:** detects tempo (BPM), matches speed, lines up the beats, and swaps the bass halfway through
+- **Two decks (A / B):** tap-to-seek waveform, CUE, SYNC, 3-band EQ (HI / MID / LOW), low/high-pass filter, ±16% tempo with key lock, and per-deck volume
+- **Equal-power crossfader** and a "Mix to the Other Deck Now" button
+- Built-in demo tracks (122, 124 and 126 BPM) so you can try mixing without your own files
 
-## الاستخدام على الهاتف
+## Using it on your phone
 
-1. افتح الموقع في Safari (على iPhone) أو Chrome (على Android).
-2. اضغط **+** واختر ملفات صوتية من تطبيق الملفات أو من مساحة التخزين.
-3. للتثبيت كتطبيق: من قائمة **مشاركة** اختر **إضافة إلى الشاشة الرئيسية**.
+1. Open the site in Safari (iPhone) or Chrome (Android).
+2. Tap **+** and pick audio files from Files or your device storage.
+3. To install it as an app: **Share → Add to Home Screen**.
 
-> الملفات تُحفظ على جهازك فقط (IndexedDB)، ولا يُرفع أي شيء إلى أي خادم. لا يمكن تشغيل أغاني Apple Music أو Spotify المحمية، لأن متصفح الويب لا يستطيع الوصول إليها. المطلوب ملفات صوتية تملكها.
+> Your files are stored on your device only (IndexedDB); nothing is uploaded. Songs from Apple Music or Spotify can't be played, because a website can't access them. You need audio files you own.
 
-## النشر (GitHub Pages)
+## Deploying
 
-الموقع ملفات ثابتة لا تحتاج إلى أي خطوة بناء:
-
-1. من **Settings → Pages** في المستودع.
-2. اختر **Deploy from a branch**، ثم الفرع والمجلد `/ (root)`.
-3. سيصبح الموقع متاحاً على `https://<user>.github.io/mashup/`.
-
-للتشغيل محلياً:
+It's a static site with no build step. On Vercel, import the repo with the framework preset **Other** and no build command. To run it locally:
 
 ```bash
 python3 -m http.server 8000
-# ثم افتح http://localhost:8000
+# then open http://localhost:8000
 ```
 
-## البنية
+## Structure
 
 ```
-index.html            واجهة التطبيق
-css/style.css         التصميم (داكن/فاتح، من اليمين لليسار)
-js/app.js             المكتبة، قراءة الوسوم، تحليل BPM، محرك الصوت، الواجهة
-sw.js                 العمل بدون إنترنت
-manifest.webmanifest  إعدادات التثبيت كتطبيق
+index.html            App markup
+css/style.css         Styles (dark/light)
+js/app.js             Library, tag reading, BPM analysis, audio engine, UI
+sw.js                 Offline support
+manifest.webmanifest  Install-as-app settings
 ```
 
-مسار الصوت في كل طرف:
+Signal path for each deck:
 
-`<audio> → EQ (low-shelf / peaking / high-shelf) → فلتر → مستوى الطرف → كروس فيدر → master → limiter → الإخراج`
+`<audio> → EQ (low-shelf / peaking / high-shelf) → filter → deck volume → crossfader → master → limiter → output`

@@ -1,5 +1,5 @@
 // Offline support: cache the app shell; music itself lives in IndexedDB.
-const CACHE = 'mazj-v1';
+const CACHE = 'mashup-v2';
 const SHELL = ['./', 'index.html', 'css/style.css', 'js/app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png'];
 
 self.addEventListener('install', (e) => {

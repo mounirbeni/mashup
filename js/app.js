@@ -1,4 +1,4 @@
-/* مزج — Mashup: a local-first music player with a two-deck mixing engine.
+/* Mashup: a local-first music player with a two-deck mixing engine.
  * Everything runs in the browser: tracks are stored in IndexedDB on the device,
  * audio goes through the Web Audio API (two decks → EQ → filter → crossfader → master). */
 (() => {
@@ -20,8 +20,7 @@ const fmt = (sec) => {
 const hashHue = (str) => { let h = 0; for (const c of String(str)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h % 360; };
 const collator = new Intl.Collator(['ar', 'en'], { sensitivity: 'base', numeric: true });
 const icon = (name) => `<svg><use href="#i-${name}"/></svg>`;
-const plural = (n, one, two, few, many) => n === 1 ? one : n === 2 ? two : (n >= 3 && n <= 10) ? `${n} ${few}` : `${n} ${many}`;
-const songsLabel = (n) => n === 0 ? 'لا أغاني' : plural(n, 'أغنية واحدة', 'أغنيتان', 'أغانٍ', 'أغنية');
+const songsLabel = (n) => n === 0 ? 'No songs' : n === 1 ? '1 song' : `${n} songs`;
 
 let toastTimer;
 function toast(msg, ms = 2200) {
@@ -321,12 +320,12 @@ function probeDuration(blob) {
 
 async function addFiles(files) {
   files = [...files].filter((f) => f.type.startsWith('audio/') || /\.(mp3|m4a|aac|wav|flac|ogg|opus|alac|aiff?)$/i.test(f.name));
-  if (!files.length) { toast('لم يتم العثور على ملفات صوتية'); return; }
+  if (!files.length) { toast('No audio files found'); return; }
   const added = [];
   let i = 0, failed = 0;
   for (const f of files) {
     i++;
-    toast(`جارٍ الإضافة ${i} من ${files.length}…`, 0);
+    toast(`Adding ${i} of ${files.length}…`, 0);
     const dur = await probeDuration(f);
     if (dur < 0) { failed++; continue; }
     const tags = await Tags.read(f);
@@ -337,7 +336,7 @@ async function addFiles(files) {
       if (m) { artist = artist || m[1].trim(); title = m[2].trim(); } else title = name;
     }
     const t = {
-      id: uid(), title, artist: artist || 'فنان غير معروف', album: tags.album || '',
+      id: uid(), title, artist: artist || 'Unknown Artist', album: tags.album || '',
       duration: dur, bpm: tags.bpm || null, beatOffset: null, peaks: null,
       hasArt: !!tags.art, addedAt: Date.now(), size: f.size,
     };
@@ -349,11 +348,11 @@ async function addFiles(files) {
       added.push(t.id);
     } catch (e) {
       console.error(e); failed++;
-      if (e && e.name === 'QuotaExceededError') { toast('امتلأت مساحة التخزين المتاحة للموقع'); break; }
+      if (e && e.name === 'QuotaExceededError') { toast('Storage is full for this site'); break; }
     }
   }
   UI.render();
-  toast(added.length ? `أُضيفت ${songsLabel(added.length)}${failed ? ` · تعذّرت ${failed}` : ''}` : 'تعذّرت إضافة الملفات');
+  toast(added.length ? `Added ${songsLabel(added.length)}${failed ? ` · ${failed} failed` : ''}` : 'Couldn’t add these files');
   queueAnalysis(added);
 }
 
@@ -579,7 +578,7 @@ const Player = {
     const deck = this.live, other = Engine.other(deck);
     other.pause();
     this.qi = i;
-    try { await deck.load(t); } catch { toast('تعذّر تحميل الأغنية'); return; }
+    try { await deck.load(t); } catch { toast('Couldn’t load this song'); return; }
     deck.seek(0);
     Engine.cancelAnim(); Engine.applyX(Engine.sideOf(deck), true);
     deck.play();
@@ -604,11 +603,11 @@ const Player = {
   },
   playNext(id) {
     if (!this.queue.length) { this.setQueue([id]); this.playIndex(0); return; }
-    this.queue.splice(this.qi + 1, 0, id); this.original.push(id); toast('ستُشغَّل تالياً');
+    this.queue.splice(this.qi + 1, 0, id); this.original.push(id); toast('Playing next');
   },
   addToQueue(id) {
     if (!this.queue.length) { this.setQueue([id]); this.playIndex(0); return; }
-    this.queue.push(id); this.original.push(id); toast('أُضيفت إلى قائمة الانتظار');
+    this.queue.push(id); this.original.push(id); toast('Added to queue');
   },
   removeFromQueue(id) {
     const cur = this.queue[this.qi];
@@ -630,7 +629,7 @@ const Player = {
     if (!t || this.mixing) return;
     const from = this.live, to = targetDeck || Engine.other(from);
     this.mixing = { from, to, i };
-    try { if (to.track?.id !== id || !targetDeck) await to.load(t); } catch { this.mixing = null; toast('تعذّر تحميل الأغنية التالية'); return; }
+    try { if (to.track?.id !== id || !targetDeck) await to.load(t); } catch { this.mixing = null; toast('Couldn’t load the next song'); return; }
     if (!this.mixing) return; // aborted while loading
     this.qi = i;
     this.startMix(from, to, dur);
@@ -746,7 +745,7 @@ const UI = {
       <button class="row-main" data-act="play" data-ctx="${ctx}">${this.artHTML(t)}
         <span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</span></span>
       </button>
-      <span class="row-meta">${eq}${bpm}<button class="icon-btn" data-act="menu" aria-label="خيارات">${icon('more')}</button></span>
+      <span class="row-meta">${eq}${bpm}<button class="icon-btn" data-act="menu" aria-label="More">${icon('more')}</button></span>
     </div>`;
   },
   listFor(tracks, ctx) { return `<div class="rows">${tracks.map((t) => this.rowHTML(t, { ctx })).join('')}</div>`; },
@@ -767,15 +766,15 @@ const UI = {
     if (empty) { c.innerHTML = ''; return; }
     let tracks = all, head = '';
     if (this.filter) {
-      tracks = all.filter((t) => this.filter.type === 'album' ? (t.album || 'ألبوم غير معروف') === this.filter.value : t.artist === this.filter.value);
-      head = `<div class="sub-head"><button class="back-btn" data-act="clear-filter">${icon('back')}${this.filter.type === 'album' ? 'الألبومات' : 'الفنانون'}</button></div><h2 class="section-label">${esc(this.filter.value)}</h2>`;
+      tracks = all.filter((t) => this.filter.type === 'album' ? (t.album || 'Unknown Album') === this.filter.value : t.artist === this.filter.value);
+      head = `<div class="sub-head"><button class="back-btn" data-act="clear-filter">${icon('back')}${this.filter.type === 'album' ? 'Albums' : 'Artists'}</button></div><h2 class="section-label">${esc(this.filter.value)}</h2>`;
     }
     $('#lib-tools').hidden = !(this.seg === 'songs' || this.filter);
     if (this.seg === 'songs' || this.filter) {
       this.currentListIds = tracks.map((t) => t.id);
       c.innerHTML = head + this.listFor(tracks, 'lib') + `<p class="count-note">${songsLabel(tracks.length)}</p>`;
     } else {
-      const key = this.seg === 'albums' ? (t) => t.album || 'ألبوم غير معروف' : (t) => t.artist;
+      const key = this.seg === 'albums' ? (t) => t.album || 'Unknown Album' : (t) => t.artist;
       const groups = new Map();
       for (const t of all) { const k = key(t); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(t); }
       const names = [...groups.keys()].sort(collator.compare);
@@ -790,7 +789,7 @@ const UI = {
   renderPlaylists() {
     const c = $('#pl-content');
     if (!Lib.playlists.length) {
-      c.innerHTML = `<div class="empty"><div class="empty-art">${icon('list')}</div><h2>لا قوائم بعد</h2><p>أنشئ قائمة تشغيل واجعل الميكسر يمزج أغانيها بالتتابع.</p><button class="primary-btn" data-act="new-pl">${icon('plus')}قائمة جديدة</button></div>`;
+      c.innerHTML = `<div class="empty"><div class="empty-art">${icon('list')}</div><h2>No playlists yet</h2><p>Create a playlist and let the mixer blend its songs back to back.</p><button class="primary-btn" data-act="new-pl">${icon('plus')}New Playlist</button></div>`;
       return;
     }
     c.innerHTML = `<div class="grid">${Lib.playlists.map((pl) => `<button class="tile" data-act="open-pl" data-pl="${esc(pl.id)}">${this.coverHTML(pl)}<span class="t1">${esc(pl.name)}</span><span class="t2">${songsLabel(pl.trackIds.length)}</span></button>`).join('')}</div>`;
@@ -811,7 +810,7 @@ const UI = {
     cover.innerHTML = this.coverHTML(pl, true);
     $('#pl-name').textContent = pl.name;
     const total = ts.reduce((s, t) => s + (t.duration || 0), 0);
-    $('#pl-meta').textContent = `${songsLabel(ts.length)} · ${Math.round(total / 60)} دقيقة`;
+    $('#pl-meta').textContent = `${songsLabel(ts.length)} · ${Math.round(total / 60)} min`;
     this.currentListIds = ts.map((t) => t.id);
     $('#pl-tracks').innerHTML = ts.length ? this.listFor(ts, 'pl') : '';
     this.hydrateArt($('#view-playlist'));
@@ -819,10 +818,10 @@ const UI = {
   renderSearch() {
     const q = $('#search-input').value.trim().toLowerCase();
     const c = $('#search-results');
-    if (!q) { c.innerHTML = Lib.tracks.size ? `<p class="count-note">ابحث في ${songsLabel(Lib.tracks.size)}</p>` : ''; return; }
+    if (!q) { c.innerHTML = Lib.tracks.size ? `<p class="count-note">Search ${songsLabel(Lib.tracks.size)}</p>` : ''; return; }
     const ts = Lib.sorted().filter((t) => [t.title, t.artist, t.album].some((s) => (s || '').toLowerCase().includes(q)));
     this.currentListIds = ts.map((t) => t.id);
-    c.innerHTML = ts.length ? this.listFor(ts, 'search') : `<p class="count-note">لا نتائج لـ "${esc(q)}"</p>`;
+    c.innerHTML = ts.length ? this.listFor(ts, 'search') : `<p class="count-note">No results for "${esc(q)}"</p>`;
     this.hydrateArt(c);
   },
   showView(name) {
@@ -904,7 +903,7 @@ const UI = {
     $('#np-shuffle').setAttribute('aria-pressed', Player.shuffle);
     $('#np-repeat').setAttribute('aria-pressed', Player.repeat !== 'off');
     $('#np-rep1').hidden = Player.repeat !== 'one';
-    $('#np-xf-label').textContent = settings.crossfade > 0 && settings.autoMix ? `مزج ${settings.crossfade} ث` : 'المزج متوقف';
+    $('#np-xf-label').textContent = settings.crossfade > 0 && settings.autoMix ? `Mix ${settings.crossfade}s` : 'Mix off';
     $('#mx-automix').setAttribute('aria-pressed', settings.autoMix);
     this.markPlaying();
   },
@@ -921,18 +920,18 @@ const UI = {
     const t = d.track;
     const knob = (k, label) => `<div class="knob" data-knob="${k}"><div class="knob-dial" tabindex="0" role="slider" aria-label="${label}"></div><span>${label}</span></div>`;
     return `<div class="deck-top"><span class="deck-letter">${d.id}</span>
-        <button class="deck-load" data-dact="load"><span class="t1">${t ? esc(t.title) : 'اختر أغنية'}</span><span class="t2">${t ? esc(t.artist) : 'اضغط للتحميل'}</span></button></div>
+        <button class="deck-load" data-dact="load"><span class="t1">${t ? esc(t.title) : 'Choose a song'}</span><span class="t2">${t ? esc(t.artist) : 'Tap to load'}</span></button></div>
       <div class="deck-wave" data-dact="wave"><canvas></canvas><i class="ph"></i></div>
       <div class="deck-stats"><span data-s="time">0:00</span><b data-s="bpm">— BPM</b><span data-s="rem">-0:00</span></div>
       <div class="deck-transport">
         <button class="dk-btn" data-dact="cue">CUE</button>
-        <button class="dk-btn play" data-dact="play" aria-label="تشغيل">${icon('play')}</button>
+        <button class="dk-btn play" data-dact="play" aria-label="Play">${icon('play')}</button>
         <button class="dk-btn" data-dact="sync">SYNC</button>
       </div>
       <div class="knobs">${knob('high', 'HI')}${knob('mid', 'MID')}${knob('low', 'LOW')}${knob('filter', 'FILTER')}</div>
       <div class="deck-sliders">
-        <label>TEMPO<input type="range" class="center-range" data-dact="tempo" min="-160" max="160" value="0" aria-label="السرعة"><output data-s="pitch">0.0%</output></label>
-        <label>VOL<input type="range" data-dact="trim" min="0" max="100" value="100" aria-label="مستوى الطرف"><output data-s="trim">100</output></label>
+        <label>TEMPO<input type="range" class="center-range" data-dact="tempo" min="-160" max="160" value="0" aria-label="Tempo"><output data-s="pitch">0.0%</output></label>
+        <label>VOL<input type="range" data-dact="trim" min="0" max="100" value="100" aria-label="Deck volume"><output data-s="trim">100</output></label>
       </div>`;
   },
   deckLoaded(d) {
@@ -940,8 +939,8 @@ const UI = {
     if (!el) return;
     if (!el.dataset.built) { el.innerHTML = this.deckHTML(d); el.dataset.built = '1'; this.bindKnobs(d, el); }
     const t = d.track;
-    $('.deck-load .t1', el).textContent = t ? t.title : 'اختر أغنية';
-    $('.deck-load .t2', el).textContent = t ? t.artist : 'اضغط للتحميل';
+    $('.deck-load .t1', el).textContent = t ? t.title : 'Choose a song';
+    $('.deck-load .t2', el).textContent = t ? t.artist : 'Tap to load';
     this.drawWave(d); this.deckRate(d); this.syncKnobs(d);
     $('[data-dact="trim"]', el).value = Math.round(d.trimVal * 100);
     $('[data-s="trim"]', el).textContent = Math.round(d.trimVal * 100);
@@ -975,7 +974,7 @@ const UI = {
     if (!p || !p.length) {
       g.fillStyle = col; g.globalAlpha = 0.35; g.fillRect(0, h / 2 - 1, w, 2);
       g.globalAlpha = 1; g.font = '11px sans-serif'; g.fillStyle = getComputedStyle(document.body).color; g.textAlign = 'center';
-      g.fillText(p ? '—' : 'جارٍ التحليل…', w / 2, h / 2 - 6); return;
+      g.fillText(p ? '—' : 'Analyzing…', w / 2, h / 2 - 6); return;
     }
     g.fillStyle = col;
     const n = p.length, bw = w / n;
@@ -1046,13 +1045,13 @@ const UI = {
     this.openSheet(`
       <div class="sheet-head">${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}${t.bpm ? ` · ${Math.round(t.bpm)} BPM` : ''}</span></span></div>
       <div class="menu">
-        <button data-m="next">${icon('queue')}تشغيل التالي</button>
-        <button data-m="queue">${icon('list')}إضافة إلى قائمة الانتظار</button>
-        <button data-m="deckA">${icon('mixer')}تحميل على الطرف A<span class="tag" style="background:var(--deck-a)">A</span></button>
-        <button data-m="deckB">${icon('mixer')}تحميل على الطرف B<span class="tag" style="background:var(--deck-b)">B</span></button>
-        <button data-m="pl">${icon('plus')}إضافة إلى قائمة تشغيل…</button>
-        ${inPl ? `<button data-m="unpl">${icon('trash')}إزالة من هذه القائمة</button>` : ''}
-        <button data-m="del" class="danger">${icon('trash')}حذف من المكتبة</button>
+        <button data-m="next">${icon('queue')}Play Next</button>
+        <button data-m="queue">${icon('list')}Add to Queue</button>
+        <button data-m="deckA">${icon('mixer')}Load to Deck A<span class="tag" style="background:var(--deck-a)">A</span></button>
+        <button data-m="deckB">${icon('mixer')}Load to Deck B<span class="tag" style="background:var(--deck-b)">B</span></button>
+        <button data-m="pl">${icon('plus')}Add to Playlist…</button>
+        ${inPl ? `<button data-m="unpl">${icon('trash')}Remove from this Playlist</button>` : ''}
+        <button data-m="del" class="danger">${icon('trash')}Delete from Library</button>
       </div>`, (b) => {
       b.addEventListener('click', async (e) => {
         const m = e.target.closest('[data-m]')?.dataset.m; if (!m) return;
@@ -1066,28 +1065,28 @@ const UI = {
         }
         if (m === 'del') {
           const btn = e.target.closest('[data-m]');
-          if (btn.dataset.armed) { this.closeSheet(); await deleteTrack(id); toast('حُذفت الأغنية'); }
-          else { btn.dataset.armed = '1'; btn.lastChild.textContent = 'اضغط مرة أخرى لتأكيد الحذف'; }
+          if (btn.dataset.armed) { this.closeSheet(); await deleteTrack(id); toast('Song deleted'); }
+          else { btn.dataset.armed = '1'; btn.lastChild.textContent = 'Tap again to confirm'; }
         }
       });
     });
   },
   pickPlaylist(id) {
     const rows = Lib.playlists.map((p) => `<button data-pl="${esc(p.id)}">${icon('list')}${esc(p.name)}<span class="tag" style="color:var(--muted)">${p.trackIds.length}</span></button>`).join('');
-    this.openSheet(`<h3>إضافة إلى قائمة</h3><div class="menu"><button data-pl="__new">${icon('plus')}قائمة جديدة…</button>${rows}</div>`, (b) => {
+    this.openSheet(`<h3>Add to Playlist</h3><div class="menu"><button data-pl="__new">${icon('plus')}New Playlist…</button>${rows}</div>`, (b) => {
       b.addEventListener('click', async (e) => {
         const p = e.target.closest('[data-pl]')?.dataset.pl; if (!p) return;
         if (p === '__new') { this.newPlaylist([id]); return; }
         const pl = Lib.playlists.find((x) => x.id === p);
         if (!pl.trackIds.includes(id)) pl.trackIds.push(id);
-        await Lib.savePlaylist(pl); this.closeSheet(); toast(`أُضيفت إلى "${pl.name}"`);
+        await Lib.savePlaylist(pl); this.closeSheet(); toast(`Added to "${pl.name}"`);
       });
     });
   },
   newPlaylist(seed = []) {
-    this.openSheet(`<h3>قائمة تشغيل جديدة</h3>
-      <form id="pl-form"><input class="text-input" id="pl-name-input" placeholder="اسم القائمة" maxlength="60" autocomplete="off" required>
-      <div class="sheet-actions"><button type="button" class="ghost-btn" data-close>إلغاء</button><button class="primary-btn" type="submit">إنشاء</button></div></form>`, (b) => {
+    this.openSheet(`<h3>New Playlist</h3>
+      <form id="pl-form"><input class="text-input" id="pl-name-input" placeholder="Playlist name" maxlength="60" autocomplete="off" required>
+      <div class="sheet-actions"><button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit">Create</button></div></form>`, (b) => {
       const inp = $('#pl-name-input', b); setTimeout(() => inp.focus(), 50);
       $('[data-close]', b).onclick = () => this.closeSheet();
       $('#pl-form', b).addEventListener('submit', async (e) => {
@@ -1096,7 +1095,7 @@ const UI = {
         const pl = { id: uid(), name, trackIds: seed.slice(), createdAt: Date.now() };
         Lib.playlists.push(pl); await Lib.savePlaylist(pl);
         this.closeSheet();
-        if (seed.length) toast(`أُنشئت "${name}"`);
+        if (seed.length) toast(`Created "${name}"`);
         else { this.setTab('playlists'); this.openPlaylist(pl.id); this.pickSongs(pl); }
       });
     });
@@ -1105,10 +1104,10 @@ const UI = {
   pickSongs(pl) {
     const sel = new Set(pl.trackIds);
     const all = Lib.sorted();
-    if (!all.length) { toast('أضف موسيقى إلى مكتبتك أولاً'); return; }
-    this.openSheet(`<h3>إضافة أغانٍ إلى "${esc(pl.name)}"</h3>
+    if (!all.length) { toast('Add music to your library first'); return; }
+    this.openSheet(`<h3>Add Songs to "${esc(pl.name)}"</h3>
       <div>${all.map((t) => `<button class="pick-row" data-id="${esc(t.id)}" aria-pressed="${sel.has(t.id)}">${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}</span></span><span class="check"></span></button>`).join('')}</div>
-      <div class="sheet-actions"><button class="primary-btn" data-done>تم</button></div>`, (b) => {
+      <div class="sheet-actions"><button class="primary-btn" data-done>Done</button></div>`, (b) => {
       b.addEventListener('click', async (e) => {
         const r = e.target.closest('.pick-row');
         if (r) { const id = r.dataset.id; sel.has(id) ? sel.delete(id) : sel.add(id); r.setAttribute('aria-pressed', sel.has(id)); return; }
@@ -1122,20 +1121,20 @@ const UI = {
   playlistMenu() {
     const pl = Lib.playlists.find((p) => p.id === this.plId); if (!pl) return;
     this.openSheet(`<h3>${esc(pl.name)}</h3><div class="menu">
-      <button data-m="rename">${icon('note')}إعادة التسمية</button>
-      <button data-m="shuffle">${icon('shuffle')}تشغيل عشوائي</button>
-      <button data-m="del" class="danger">${icon('trash')}حذف القائمة</button></div>`, (b) => {
+      <button data-m="rename">${icon('note')}Rename</button>
+      <button data-m="shuffle">${icon('shuffle')}Shuffle</button>
+      <button data-m="del" class="danger">${icon('trash')}Delete Playlist</button></div>`, (b) => {
       b.addEventListener('click', async (e) => {
         const btn = e.target.closest('[data-m]'); if (!btn) return;
         const m = btn.dataset.m;
         if (m === 'shuffle') { this.closeSheet(); playList(pl.trackIds.filter((id) => Lib.tracks.has(id)), 0, true); }
         if (m === 'rename') {
-          this.openSheet(`<h3>إعادة التسمية</h3><form id="rn"><input class="text-input" id="rn-in" value="${esc(pl.name)}" maxlength="60" required><div class="sheet-actions"><button class="primary-btn" type="submit">حفظ</button></div></form>`, (b2) => {
+          this.openSheet(`<h3>Rename</h3><form id="rn"><input class="text-input" id="rn-in" value="${esc(pl.name)}" maxlength="60" required><div class="sheet-actions"><button class="primary-btn" type="submit">Save</button></div></form>`, (b2) => {
             $('#rn', b2).addEventListener('submit', async (ev) => { ev.preventDefault(); pl.name = $('#rn-in', b2).value.trim() || pl.name; await Lib.savePlaylist(pl); this.closeSheet(); this.renderPlaylist(); });
           });
         }
         if (m === 'del') {
-          if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.lastChild.textContent = 'اضغط مرة أخرى لتأكيد الحذف'; return; }
+          if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.lastChild.textContent = 'Tap again to confirm'; return; }
           Lib.playlists = Lib.playlists.filter((p) => p.id !== pl.id); await DB.del('playlists', pl.id);
           this.closeSheet(); this.plId = null; this.showView('playlists'); this.renderPlaylists();
         }
@@ -1148,9 +1147,9 @@ const UI = {
     for (let i = Player.qi + 1; i < Player.queue.length; i++) { const t = Lib.tracks.get(Player.queue[i]); if (t) up.push([i, t]); }
     if (Player.repeat === 'all') for (let i = 0; i < Player.qi; i++) { const t = Lib.tracks.get(Player.queue[i]); if (t) up.push([i, t]); }
     this.openSheet(`
-      ${cur ? `<h3>يُشغَّل الآن</h3><div class="sheet-head queue-now">${this.artHTML(cur)}<span class="row-text"><span class="t1">${esc(cur.title)}</span><span class="t2">${esc(cur.artist)}</span></span></div>` : ''}
-      <h3>التالي ${settings.autoMix && settings.crossfade ? `<small style="font-size:13px;color:var(--muted);font-weight:500">· مزج تلقائي ${settings.crossfade} ث</small>` : ''}</h3>
-      ${up.length ? `<div class="rows">${up.map(([i, t]) => `<div class="row" data-qi="${i}"><button class="row-main" data-q="jump">${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}${t.bpm ? ' · ' + Math.round(t.bpm) + ' BPM' : ''}</span></span></button><span class="row-meta"><button class="icon-btn" data-q="rm" aria-label="إزالة">${icon('trash')}</button></span></div>`).join('')}</div>` : '<p class="count-note">لا شيء في قائمة الانتظار</p>'}`, (b) => {
+      ${cur ? `<h3>Now Playing</h3><div class="sheet-head queue-now">${this.artHTML(cur)}<span class="row-text"><span class="t1">${esc(cur.title)}</span><span class="t2">${esc(cur.artist)}</span></span></div>` : ''}
+      <h3>Up Next ${settings.autoMix && settings.crossfade ? `<small style="font-size:13px;color:var(--muted);font-weight:500">· auto-mix ${settings.crossfade}s</small>` : ''}</h3>
+      ${up.length ? `<div class="rows">${up.map(([i, t]) => `<div class="row" data-qi="${i}"><button class="row-main" data-q="jump">${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}${t.bpm ? ' · ' + Math.round(t.bpm) + ' BPM' : ''}</span></span></button><span class="row-meta"><button class="icon-btn" data-q="rm" aria-label="Remove">${icon('trash')}</button></span></div>`).join('')}</div>` : '<p class="count-note">Nothing queued</p>'}`, (b) => {
       b.addEventListener('click', (e) => {
         const r = e.target.closest('[data-qi]'); const a = e.target.closest('[data-q]')?.dataset.q; if (!r || !a) return;
         const i = +r.dataset.qi;
@@ -1160,32 +1159,32 @@ const UI = {
     });
   },
   settingsSheet(compact) {
-    this.openSheet(`<h3>${compact ? 'المزج' : 'الإعدادات'}</h3>
-      <div class="setting"><div class="setting-row"><strong>المزج التلقائي</strong><label class="switch"><input type="checkbox" id="s-auto" ${settings.autoMix ? 'checked' : ''}><i></i></label></div>
-        <small>يدخل الأغنية التالية بسلاسة قبل نهاية الحالية، مثل الـ DJ.</small></div>
-      <div class="setting"><div class="setting-row"><strong>مدة التداخل</strong><output id="s-xf-out">${settings.crossfade} ث</output></div>
-        <input type="range" id="s-xf" min="0" max="12" step="1" value="${settings.crossfade}" aria-label="مدة التداخل"></div>
-      <div class="setting"><div class="setting-row"><strong>مزج ذكي</strong><label class="switch"><input type="checkbox" id="s-smart" ${settings.smartMix ? 'checked' : ''}><i></i></label></div>
-        <small>يطابق سرعة الإيقاع (BPM) ومحاذاة الضربات ويبدّل الباس في منتصف المزج.</small></div>
-      <div class="setting"><div class="setting-row"><strong>تثبيت طبقة الصوت</strong><label class="switch"><input type="checkbox" id="s-key" ${settings.keyLock ? 'checked' : ''}><i></i></label></div>
-        <small>عند تغيير السرعة تبقى طبقة الصوت كما هي.</small></div>
+    this.openSheet(`<h3>${compact ? 'Mixing' : 'Settings'}</h3>
+      <div class="setting"><div class="setting-row"><strong>Auto-Mix</strong><label class="switch"><input type="checkbox" id="s-auto" ${settings.autoMix ? 'checked' : ''}><i></i></label></div>
+        <small>Blends the next song in before the current one ends, like a DJ.</small></div>
+      <div class="setting"><div class="setting-row"><strong>Crossfade length</strong><output id="s-xf-out">${settings.crossfade}s</output></div>
+        <input type="range" id="s-xf" min="0" max="12" step="1" value="${settings.crossfade}" aria-label="Crossfade length"></div>
+      <div class="setting"><div class="setting-row"><strong>Smart Mix</strong><label class="switch"><input type="checkbox" id="s-smart" ${settings.smartMix ? 'checked' : ''}><i></i></label></div>
+        <small>Matches tempo (BPM), lines up the beats, and swaps the bass halfway through.</small></div>
+      <div class="setting"><div class="setting-row"><strong>Key Lock</strong><label class="switch"><input type="checkbox" id="s-key" ${settings.keyLock ? 'checked' : ''}><i></i></label></div>
+        <small>Keeps the pitch the same when tempo changes.</small></div>
       ${compact ? '' : `<div class="setting"><div class="menu">
-        <button data-s="add">${icon('plus')}إضافة موسيقى من الجهاز</button>
-        <button data-s="demo">${icon('wave')}إضافة مقاطع تجريبية للمزج</button>
-        <button data-s="theme">${icon('gear')}المظهر: <span id="s-theme-name"></span></button>
-        <button data-s="wipe" class="danger">${icon('trash')}حذف المكتبة بالكامل</button></div>
+        <button data-s="add">${icon('plus')}Add Music from Device</button>
+        <button data-s="demo">${icon('wave')}Add Demo Tracks for Mixing</button>
+        <button data-s="theme">${icon('gear')}Appearance: <span id="s-theme-name"></span></button>
+        <button data-s="wipe" class="danger">${icon('trash')}Delete Entire Library</button></div>
         <small id="s-usage"></small></div>`}`, (b) => {
       const xf = $('#s-xf', b);
       const paint = () => xf.style.setProperty('--p', (xf.value / 12 * 100) + '%');
       paint();
-      xf.addEventListener('input', () => { settings.crossfade = +xf.value; $('#s-xf-out', b).textContent = xf.value + ' ث'; paint(); saveSettings(); this.transport(); });
+      xf.addEventListener('input', () => { settings.crossfade = +xf.value; $('#s-xf-out', b).textContent = xf.value + 's'; paint(); saveSettings(); this.transport(); });
       $('#s-auto', b).addEventListener('change', (e) => { settings.autoMix = e.target.checked; saveSettings(); this.transport(); });
       $('#s-smart', b).addEventListener('change', (e) => { settings.smartMix = e.target.checked; saveSettings(); });
       $('#s-key', b).addEventListener('change', (e) => { settings.keyLock = e.target.checked; saveSettings(); for (const d of Object.values(Engine.decks)) d.setRate(d.rate); });
       if (compact) return;
-      const themes = { auto: 'تلقائي', dark: 'داكن', light: 'فاتح' };
+      const themes = { auto: 'Automatic', dark: 'Dark', light: 'Light' };
       $('#s-theme-name', b).textContent = themes[store.get('theme', 'auto')];
-      if (navigator.storage?.estimate) navigator.storage.estimate().then((e) => { $('#s-usage', b).textContent = `المساحة المستخدمة: ${(e.usage / 1048576).toFixed(0)} م.ب من ${(e.quota / 1048576 / 1024).toFixed(1)} غ.ب متاحة. الموسيقى محفوظة على هذا الجهاز فقط.`; });
+      if (navigator.storage?.estimate) navigator.storage.estimate().then((e) => { $('#s-usage', b).textContent = `Using ${(e.usage / 1048576).toFixed(0)} MB of ${(e.quota / 1048576 / 1024).toFixed(1)} GB available. Your music is stored on this device only.`; });
       b.querySelector('.menu').addEventListener('click', async (e) => {
         const btn = e.target.closest('[data-s]'); if (!btn) return;
         const s = btn.dataset.s;
@@ -1196,22 +1195,22 @@ const UI = {
           const nx = order[(order.indexOf(cur) + 1) % 3]; store.set('theme', nx); applyTheme(); $('#s-theme-name', b).textContent = themes[nx];
         }
         if (s === 'wipe') {
-          if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.lastChild.textContent = 'اضغط مرة أخرى لحذف كل الأغاني'; return; }
+          if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.lastChild.textContent = 'Tap again to delete every song'; return; }
           Engine.decks.A.unload(); Engine.decks.B.unload();
           await Promise.all(['tracks', 'audio', 'art', 'playlists'].map((s2) => DB.clear(s2)));
           Lib.tracks.clear(); Lib.playlists = []; Player.queue = []; Player.original = []; Player.qi = -1;
-          this.closeSheet(); this.render(); this.nowPlaying(); toast('حُذفت المكتبة');
+          this.closeSheet(); this.render(); this.nowPlaying(); toast('Library deleted');
         }
       });
     });
   },
   deckPicker(d) {
     const all = Lib.sorted();
-    if (!all.length) { toast('أضف موسيقى إلى مكتبتك أولاً'); return; }
+    if (!all.length) { toast('Add music to your library first'); return; }
     const other = Engine.other(d);
     const ref = other.bpmNow;
-    this.openSheet(`<h3>تحميل على الطرف ${d.id}${ref ? ` <small style="font-size:13px;color:var(--muted);font-weight:500">· الطرف ${other.id} على ${ref.toFixed(1)} BPM</small>` : ''}</h3>
-      <label class="search-box" style="margin-bottom:8px">${icon('search')}<input type="search" id="dp-q" placeholder="ابحث" autocomplete="off"></label>
+    this.openSheet(`<h3>Load to Deck ${d.id}${ref ? ` <small style="font-size:13px;color:var(--muted);font-weight:500">· Deck ${other.id} is at ${ref.toFixed(1)} BPM</small>` : ''}</h3>
+      <label class="search-box" style="margin-bottom:8px">${icon('search')}<input type="search" id="dp-q" placeholder="Search" autocomplete="off"></label>
       <div class="rows" id="dp-list"></div>`, (b) => {
       const list = $('#dp-list', b);
       const draw = () => {
@@ -1235,7 +1234,7 @@ async function loadToDeck(d, id) {
   const t = Lib.tracks.get(id); if (!t) return;
   Engine.ensure();
   if (Player.mixing && (Player.mixing.to === d || Player.mixing.from === d)) Engine.cancelAnim();
-  try { await d.load(t); toast(`حُمّلت على الطرف ${d.id}`); } catch { toast('تعذّر تحميل الأغنية'); }
+  try { await d.load(t); toast(`Loaded to Deck ${d.id}`); } catch { toast('Couldn’t load this song'); }
   if (!Player.live.track) { Player.live = d; Engine.applyX(Engine.sideOf(d), true); }
   UI.deckState(); UI.nowPlaying();
 }
@@ -1262,7 +1261,7 @@ const MediaSessionCtl = {
   },
   update(t, art) {
     if (!('mediaSession' in navigator) || !window.MediaMetadata) return;
-    navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist, album: t.album || 'مزج', artwork: art ? [{ src: art, sizes: '512x512' }] : [] });
+    navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist, album: t.album || 'Mashup', artwork: art ? [{ src: art, sizes: '512x512' }] : [] });
   },
   tick() {
     if (!('mediaSession' in navigator)) return;
@@ -1277,9 +1276,9 @@ const MediaSessionCtl = {
  * ========================================================================= */
 const Demo = {
   defs: [
-    { title: 'سوق النيون', artist: 'مزج · عينة', bpm: 122, root: 57, prog: [0, -4, -7, -2], seed: 1 },
-    { title: 'طريق الصحراء', artist: 'مزج · عينة', bpm: 124, root: 50, prog: [0, 3, -2, -4], seed: 2 },
-    { title: 'كورنيش منتصف الليل', artist: 'مزج · عينة', bpm: 126, root: 54, prog: [0, -5, -3, -7], seed: 3 },
+    { title: 'Neon Souk', artist: 'Mashup Demo', bpm: 122, root: 57, prog: [0, -4, -7, -2], seed: 1 },
+    { title: 'Desert Drive', artist: 'Mashup Demo', bpm: 124, root: 50, prog: [0, 3, -2, -4], seed: 2 },
+    { title: 'Midnight Corniche', artist: 'Mashup Demo', bpm: 126, root: 54, prog: [0, -5, -3, -7], seed: 3 },
   ],
   async render(def) {
     const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -1335,17 +1334,17 @@ const Demo = {
     return { blob: wav(buf), duration: buf.duration };
   },
   async add() {
-    toast('جارٍ توليد المقاطع التجريبية…', 0);
+    toast('Generating demo tracks…', 0);
     const ids = [];
     try {
       for (const def of this.defs) {
         const { blob, duration } = await this.render(def);
-        const t = { id: uid(), title: def.title, artist: def.artist, album: 'مقاطع تجريبية', duration, bpm: def.bpm, beatOffset: 0.05, peaks: null, hasArt: false, addedAt: Date.now(), size: blob.size, demo: true };
+        const t = { id: uid(), title: def.title, artist: def.artist, album: 'Demo Tracks', duration, bpm: def.bpm, beatOffset: 0.05, peaks: null, hasArt: false, addedAt: Date.now(), size: blob.size, demo: true };
         await DB.put('audio', blob, t.id); await DB.put('tracks', t);
         Lib.tracks.set(t.id, t); ids.push(t.id);
       }
-    } catch (e) { console.error(e); toast('تعذّر توليد المقاطع'); return; }
-    UI.render(); toast('أُضيفت 3 مقاطع تجريبية — شغّلها وجرّب المزج');
+    } catch (e) { console.error(e); toast('Couldn’t generate the demo tracks'); return; }
+    UI.render(); toast('Added 3 demo tracks. Play one and try mixing.');
     queueAnalysis(ids);
   },
 };
@@ -1485,7 +1484,7 @@ function bind() {
   $('#pl-mix').onclick = () => {
     if (!settings.autoMix) { settings.autoMix = true; saveSettings(); }
     if (!settings.crossfade) { settings.crossfade = 6; saveSettings(); }
-    playList(UI.currentListIds, 0, false); toast(`المزج التلقائي مفعّل · ${settings.crossfade} ث`);
+    playList(UI.currentListIds, 0, false); toast(`Auto-mix on · ${settings.crossfade}s`);
   };
   $('#pl-add-songs').onclick = () => { const pl = Lib.playlists.find((p) => p.id === UI.plId); if (pl) UI.pickSongs(pl); };
   $('#search-input').addEventListener('input', () => UI.renderSearch());
@@ -1544,7 +1543,7 @@ function bind() {
   });
 
   // mixer
-  $('#mx-automix').onclick = () => { settings.autoMix = !settings.autoMix; saveSettings(); UI.transport(); toast(settings.autoMix ? `المزج التلقائي مفعّل · ${settings.crossfade || 0} ث` : 'المزج التلقائي متوقف'); };
+  $('#mx-automix').onclick = () => { settings.autoMix = !settings.autoMix; saveSettings(); UI.transport(); toast(settings.autoMix ? `Auto-mix on · ${settings.crossfade || 0}s` : 'Auto-mix off'); };
   const xf = $('#xfader');
   xf.addEventListener('input', () => { Engine.ensure(); Engine.setX(xf.value / 1000); Player.followFader(); });
   $('#xf-center').onclick = () => { Engine.ensure(); Engine.setX(0.5); };
@@ -1570,17 +1569,17 @@ function bind() {
       }
       if (a === 'cue') {
         if (!d.track) return;
-        if (d.playing) { d.pause(); d.seek(d.cue); } else { d.cue = d.time; toast(`نقطة البداية ${fmt(d.cue)}`, 1200); }
+        if (d.playing) { d.pause(); d.seek(d.cue); } else { d.cue = d.time; toast(`Cue set at ${fmt(d.cue)}`, 1200); }
       }
       if (a === 'sync') {
         const o = Engine.other(d);
-        if (!d.track?.bpm || !o.track?.bpm) { toast('السرعة (BPM) غير معروفة بعد'); return; }
+        if (!d.track?.bpm || !o.track?.bpm) { toast('BPM isn’t detected yet'); return; }
         let ratio = o.bpmNow / d.track.bpm;
         if (ratio > 1.5) ratio /= 2; if (ratio < 0.67) ratio *= 2;
-        if (Math.abs(ratio - 1) > 0.16) { toast('فرق السرعة كبير جداً للمطابقة'); return; }
+        if (Math.abs(ratio - 1) > 0.16) { toast('Tempos are too far apart to sync'); return; }
         d.setRate(ratio);
         if (d.playing && o.playing) { let diff = d.phase() - o.phase(); diff -= Math.round(diff); d.seek(d.time - diff * 60 / d.track.bpm); }
-        toast(`طوبق الطرف ${d.id} على ${o.bpmNow.toFixed(1)} BPM`, 1500);
+        toast(`Deck ${d.id} synced to ${o.bpmNow.toFixed(1)} BPM`, 1500);
       }
     });
     el.addEventListener('input', (e) => {
@@ -1620,7 +1619,7 @@ async function boot() {
   bind();
   MediaSessionCtl.init();
   UI.renderDecks();
-  try { await Lib.load(); } catch (e) { console.error(e); toast('تعذّر فتح مكتبة الجهاز — قد يكون التصفح الخاص مفعّلاً'); }
+  try { await Lib.load(); } catch (e) { console.error(e); toast('Couldn’t open the library on this device. Private browsing may be on.'); }
   UI.render();
   const tab = store.get('tab', 'library');
   UI.setTab(['library', 'playlists', 'mixer', 'search'].includes(tab) ? tab : 'library');
