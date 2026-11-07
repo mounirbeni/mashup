@@ -50,6 +50,8 @@
 </svg>
 
 <div class="app" id="app">
+  <!-- compact title bar that appears as the large title scrolls away -->
+  <div class="navbar" id="navbar" aria-hidden="true"><span class="nav-title" id="nav-title"></span></div>
   <main class="views" id="views">
 
     <!-- ===== Library ===== -->
@@ -70,7 +72,7 @@
         <button class="pill-btn" id="btn-play-all"><svg><use href="#i-play"/></svg>Play</button>
         <button class="pill-btn" id="btn-shuffle-all"><svg><use href="#i-shuffle"/></svg>Shuffle</button>
       </div>
-      <div id="lib-content"></div>
+      <div id="lib-content"><div class="skeleton" aria-label="Loading your library"><div class="sk-row"><i class="sk-art"></i><span><i class="sk-l1"></i><i class="sk-l2"></i></span></div><div class="sk-row"><i class="sk-art"></i><span><i class="sk-l1"></i><i class="sk-l2"></i></span></div><div class="sk-row"><i class="sk-art"></i><span><i class="sk-l1"></i><i class="sk-l2"></i></span></div><div class="sk-row"><i class="sk-art"></i><span><i class="sk-l1"></i><i class="sk-l2"></i></span></div><div class="sk-row"><i class="sk-art"></i><span><i class="sk-l1"></i><i class="sk-l2"></i></span></div><div class="sk-row"><i class="sk-art"></i><span><i class="sk-l1"></i><i class="sk-l2"></i></span></div><div class="sk-row"><i class="sk-art"></i><span><i class="sk-l1"></i><i class="sk-l2"></i></span></div></div></div>
       <div class="empty" id="lib-empty" hidden>
         <div class="empty-art"><svg><use href="#i-note"/></svg></div>
         <h2>Your library is empty</h2>

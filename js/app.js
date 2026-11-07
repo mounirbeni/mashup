@@ -1271,7 +1271,9 @@ function shuffleArr(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) {
 /* =========================================================================
  * UI
  * ========================================================================= */
+const SKELETON = '<div class="skeleton" aria-label="Loading your library">' + '<div class="sk-row"><i class="sk-art"></i><span><i class="sk-l1"></i><i class="sk-l2"></i></span></div>'.repeat(7) + '</div>';
 const UI = {
+  loading: true,
   tab: 'library', seg: 'songs', filter: null, plId: null, seeking: false,
 
   /* ---------- artwork ---------- */
@@ -1313,10 +1315,15 @@ const UI = {
   currentListIds: [],
   renderLibrary() {
     const all = Lib.sorted();
+    const c = $('#lib-content');
+    if (this.loading) { // shimmer until the cloud library arrives, instead of a misleading "empty"
+      $('#lib-empty').hidden = true; $('#lib-seg').hidden = true; $('#lib-tools').hidden = true;
+      if (!c.querySelector('.skeleton')) c.innerHTML = SKELETON;
+      return;
+    }
     const empty = all.length === 0;
     $('#lib-empty').hidden = !empty;
     $('#lib-seg').hidden = empty; $('#lib-tools').hidden = empty;
-    const c = $('#lib-content');
     const banner = Local.count ? `<div class="local-banner"><span><strong>${songsLabel(Local.count)} saved only on this device</strong><small>Upload them so they play on all your devices.</small></span><button class="primary-btn small" data-act="migrate">Upload</button></div>` : '';
     if (empty && Local.count) { $('#lib-empty').hidden = true; c.innerHTML = banner; return; }
     if (empty) { c.innerHTML = ''; return; }
@@ -1328,7 +1335,7 @@ const UI = {
     $('#lib-tools').hidden = !(this.seg === 'songs' || this.filter);
     if (this.seg === 'songs' || this.filter) {
       this.currentListIds = tracks.map((t) => t.id);
-      c.innerHTML = (this.filter ? '' : banner) + head + this.listFor(tracks, 'lib') + `<p class="count-note">${songsLabel(tracks.length)}</p>`;
+      c.innerHTML = (this.filter ? '' : banner + this.shelvesHTML(all)) + head + this.listFor(tracks, 'lib') + `<p class="count-note">${songsLabel(tracks.length)}</p>`;
     } else {
       const key = this.seg === 'albums' ? (t) => t.album || 'Unknown Album' : (t) => t.artist;
       const groups = new Map();
@@ -1341,6 +1348,18 @@ const UI = {
       }
     }
     this.hydrateArt(c);
+    Motion.enter(c);
+  },
+  /* "Recently Added" and "Favorites" carousels at the top of the song list */
+  shelves: {},
+  shelvesHTML(all) {
+    if (all.length < 4) return '';
+    const recent = all.slice().sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).slice(0, 10);
+    const favs = all.filter((t) => t.fav).slice(0, 10);
+    this.shelves = { recent: recent.map((t) => t.id), fav: favs.map((t) => t.id) };
+    const cur = Player.current?.id;
+    const shelf = (key, title, ts) => !ts.length ? '' : `<section class="shelf"><h2 class="section-label">${title}</h2><div class="carousel">${ts.map((t) => `<button class="card${t.id === cur ? ' playing' : ''}" data-act="play-shelf" data-shelf="${key}" data-id="${esc(t.id)}">${this.artHTML(t, '')}<span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}</span></button>`).join('')}</div></section>`;
+    return shelf('recent', 'Recently Added', recent) + shelf('fav', 'Favorites', favs) + '<h2 class="section-label">Songs</h2>';
   },
   favIds() { return Lib.sorted().filter((t) => t.fav).map((t) => t.id); },
   getPl(id) {
@@ -1356,6 +1375,7 @@ const UI = {
     }
     c.innerHTML = `<div class="grid">${all.map((pl) => `<button class="tile" data-act="open-pl" data-pl="${esc(pl.id)}">${this.coverHTML(pl)}<span class="t1">${esc(pl.name)}</span><span class="t2">${songsLabel(pl.trackIds.length)}</span></button>`).join('')}</div>`;
     this.hydrateArt(c);
+    Motion.enter(c);
   },
   coverHTML(pl, big) {
     const ts = pl.trackIds.map((id) => Lib.tracks.get(id)).filter(Boolean);
@@ -1376,7 +1396,9 @@ const UI = {
     $('#pl-meta').textContent = `${songsLabel(ts.length)} · ${Math.round(total / 60)} min`;
     this.currentListIds = ts.map((t) => t.id);
     $('#pl-tracks').innerHTML = ts.length ? this.listFor(ts, 'pl') : '';
+    $('#pl-cover').style.transform = ''; $('#pl-cover').style.opacity = '';
     this.hydrateArt($('#view-playlist'));
+    Motion.enter($('#pl-tracks'));
   },
   renderSearch() {
     const q = $('#search-input').value.trim().toLowerCase();
@@ -1387,15 +1409,24 @@ const UI = {
     c.innerHTML = ts.length ? this.listFor(ts, 'search') : `<p class="count-note">No results for "${esc(q)}"</p>`;
     this.hydrateArt(c);
   },
-  showView(name) {
+  showView(name, kind = 'enter', keepScroll = false) {
+    const prev = $('.view:not([hidden])');
+    if (prev) Motion.rememberScroll(prev.dataset.view);
     $$('.view').forEach((v) => { v.hidden = v.dataset.view !== name; });
-    $('#views').scrollTop = 0;
+    if (keepScroll) Motion.restoreScroll(name); else { $('#views').scrollTop = 0; Motion.onScroll(); }
+    Motion.playIn($(`.view[data-view="${name}"]`), kind);
   },
   setTab(tab) {
+    if (tab === this.tab && this.tabReady) {
+      if (tab === 'playlists' && this.plId) { this.plId = null; this.showView('playlists', 'enter-pop', true); this.renderPlaylists(); return; }
+      $('#views').scrollTo({ top: 0, behavior: Motion.reduce.matches ? 'auto' : 'smooth' });
+      return;
+    }
+    this.tabReady = true;
     this.tab = tab;
     $$('#tabbar button').forEach((b) => { if (b.dataset.tab === tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-    if (tab === 'playlists') { this.plId = null; this.showView('playlists'); this.renderPlaylists(); }
-    else this.showView(tab);
+    if (tab === 'playlists') { this.plId = null; this.showView('playlists', 'enter', true); this.renderPlaylists(); }
+    else this.showView(tab, 'enter', true);
     if (tab === 'library') this.renderLibrary();
     if (tab === 'search') { this.renderSearch(); }
     store.set('tab', tab);
@@ -1408,6 +1439,7 @@ const UI = {
   },
   markPlaying() {
     const id = Player.current?.id;
+    $$('.card[data-id]').forEach((c) => c.classList.toggle('playing', c.dataset.id === id));
     $$('.row[data-id]').forEach((r) => {
       const on = r.dataset.id === id;
       r.classList.toggle('playing', on);
@@ -1422,7 +1454,15 @@ const UI = {
   /* ---------- now playing ---------- */
   async nowPlaying() {
     const t = Player.current;
-    $('#mini').hidden = !t;
+    const mini = $('#mini');
+    if (t && mini.hidden) { mini.classList.remove('enter'); void mini.offsetWidth; mini.classList.add('enter'); }
+    if (t && this.miniId && this.miniId !== t.id && !Motion.reduce.matches) {
+      const m = $('#mini-open'); m.classList.remove('swap', 'from-left'); void m.offsetWidth;
+      m.classList.add('swap'); if (Motion.swapDir === 'left') m.classList.add('from-left');
+      setTimeout(() => m.classList.remove('swap', 'from-left'), 450);
+    }
+    Motion.swapDir = null; this.miniId = t?.id;
+    mini.hidden = !t;
     this.markPlaying();
     if (!t) return;
     $('#mini-title').textContent = t.title; $('#mini-artist').textContent = t.artist;
@@ -1497,9 +1537,9 @@ const UI = {
     if (mode === 'lyrics') Lyrics.show(Player.current);
     store.set('npMode', mode);
   },
-  openNP() { $('#np').classList.add('open'); $('#np').setAttribute('aria-hidden', 'false'); this.paintEdges(true); },
+  openNP() { Motion.openNP(); $('#np').setAttribute('aria-hidden', 'false'); this.paintEdges(true); },
   closeNP() {
-    const np = $('#np'); np.classList.remove('open'); np.style.transform = ''; np.setAttribute('aria-hidden', 'true');
+    const np = $('#np'); Motion.closeNP(); np.setAttribute('aria-hidden', 'true');
     setTimeout(() => { if (!np.classList.contains('open')) this.paintEdges(false); }, 420);
   },
 
@@ -1511,12 +1551,17 @@ const UI = {
 
   /* ---------- sheets ---------- */
   openSheet(html, mount) {
+    this._sheetTok = (this._sheetTok || 0) + 1;
+    $('#sheet').classList.remove('closing'); $('#scrim').classList.remove('closing'); $('#sheet').style.transform = '';
     $('#sheet-body').innerHTML = html;
     $('#sheet').hidden = false; $('#scrim').hidden = false;
     this.hydrateArt($('#sheet'));
     mount && mount($('#sheet-body'));
   },
-  closeSheet() { $('#sheet').hidden = true; $('#scrim').hidden = true; $('#sheet-body').innerHTML = ''; },
+  closeSheet() {
+    const tok = this._sheetTok;
+    Motion.closeSheet(() => { if (tok !== this._sheetTok) return; $('#sheet').hidden = true; $('#scrim').hidden = true; $('#sheet-body').innerHTML = ''; });
+  },
   trackMenu(id, ctx) {
     const t = Lib.tracks.get(id); if (!t) return;
     const inPl = ctx === 'pl' && this.plId && this.plId !== '__fav';
@@ -1579,7 +1624,7 @@ const UI = {
       });
     });
   },
-  openPlaylist(id) { this.plId = id; this.showView('playlist'); this.renderPlaylist(); },
+  openPlaylist(id) { this.plId = id; this.renderPlaylist(); this.showView('playlist', 'enter-push'); },
   pickSongs(pl) {
     const sel = new Set(pl.trackIds);
     const all = Lib.sorted();
@@ -1705,6 +1750,8 @@ async function toggleFav(id) {
   t.fav = fav; UI.transport();
   try { await Lib.updateTrack(id, { fav }); } catch { t.fav = !fav; UI.transport(); toast('Couldn’t save. Check your connection.'); return; }
   if (UI.tab === 'playlists') UI.plId ? UI.renderPlaylist() : UI.renderPlaylists();
+  Motion.pop($('#np-fav'));
+  if (UI.tab === 'library') UI.renderLibrary();
   toast(t.fav ? 'Added to Favorites' : 'Removed from Favorites', 1400);
 }
 
@@ -2151,7 +2198,7 @@ function applyTheme() {
  * Events
  * ========================================================================= */
 function bind() {
-  $('#tabbar').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) UI.setTab(b.dataset.tab); });
+  $('#tabbar').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (!b) return; b.classList.remove('bounce'); void b.offsetWidth; b.classList.add('bounce'); UI.setTab(b.dataset.tab); });
   const pick = () => $('#file-input').click();
   $('#btn-add').onclick = pick; $('#btn-add-empty').onclick = pick;
   $('#file-input').addEventListener('change', (e) => { const f = e.target.files; if (f?.length) addFiles(f); e.target.value = ''; });
@@ -2178,11 +2225,12 @@ function bind() {
     if (act === 'filter') { UI.filter = { type: a.dataset.type, value: a.dataset.value }; UI.renderLibrary(); $('#views').scrollTop = 0; }
     if (act === 'clear-filter') { UI.filter = null; UI.renderLibrary(); }
     if (act === 'open-pl') UI.openPlaylist(a.dataset.pl);
+    if (act === 'play-shelf') { const ids = UI.shelves[a.dataset.shelf] || [a.dataset.id]; playList(ids, Math.max(0, ids.indexOf(a.dataset.id)), false); }
     if (act === 'new-pl') UI.newPlaylist();
     if (act === 'migrate') Local.migrate();
   });
   $('#btn-new-pl').onclick = () => UI.newPlaylist();
-  $('#pl-back').onclick = () => { UI.plId = null; UI.showView('playlists'); UI.renderPlaylists(); };
+  $('#pl-back').onclick = () => { UI.plId = null; UI.showView('playlists', 'enter-pop', true); UI.renderPlaylists(); };
   $('#pl-more').onclick = () => UI.playlistMenu();
   $('#pl-play').onclick = () => playList(UI.currentListIds, 0, false);
   $('#pl-shuffle').onclick = () => playList(UI.currentListIds, 0, true);
@@ -2194,7 +2242,7 @@ function bind() {
   $('#mini-play').onclick = () => Player.toggle();
   $('#mini-next').onclick = () => Player.next(true);
   $('#np-close').onclick = () => UI.closeNP();
-  $('#np-play').onclick = () => Player.toggle();
+  $('#np-play').onclick = (e) => { const b = e.currentTarget; b.classList.remove('tap'); void b.offsetWidth; b.classList.add('tap'); Player.toggle(); };
   $('#np-next').onclick = () => Player.next(true);
   $('#np-prev').onclick = () => Player.prev();
   $('#np-fav').onclick = () => { if (Player.current) toggleFav(Player.current.id); };
@@ -2215,24 +2263,7 @@ function bind() {
   vol.value = Math.round(settings.volume * 100); vol.style.setProperty('--p', vol.value + '%');
   vol.addEventListener('input', () => { vol.style.setProperty('--p', vol.value + '%'); Engine.setVolume(vol.value / 100); });
 
-  // swipe down to close now playing
-  let sy = null;
-  const np = $('#np');
-  np.addEventListener('touchstart', (e) => {
-    if (e.target.closest('input,canvas,.np-lyrics')) return;
-    sy = e.touches[0].clientY;
-  }, { passive: true });
-  np.addEventListener('touchmove', (e) => {
-    if (sy == null) return;
-    const dy = Math.max(0, e.touches[0].clientY - sy);
-    np.style.transition = 'none'; np.style.transform = `translateY(${dy}px)`;
-  }, { passive: true });
-  np.addEventListener('touchend', (e) => {
-    if (sy == null) return;
-    const dy = e.changedTouches[0].clientY - sy; sy = null;
-    np.style.transition = ''; np.style.transform = '';
-    if (dy > 110) UI.closeNP();
-  });
+  Motion.bind();
 
   // sheets
   $('#scrim').onclick = () => UI.closeSheet();
@@ -2253,6 +2284,224 @@ function bind() {
 }
 
 /* =========================================================================
+ * Motion — scroll-linked titles, view transitions, the Now Playing flight,
+ * and touch gestures (long-press, swipe to skip, drag to dismiss).
+ * ========================================================================= */
+const Motion = {
+  reduce: matchMedia('(prefers-reduced-motion: reduce)'),
+  scrollPos: {},
+  haptic(ms = 8) { try { navigator.vibrate && navigator.vibrate(ms); } catch { /* unsupported */ } },
+  /* (re)play the entrance on a list, but only when its contents actually changed */
+  enter(container) {
+    if (!container) return;
+    const key = $$('[data-id],[data-value],[data-pl]', container).slice(0, 40).map((e) => e.dataset.id || e.dataset.value || e.dataset.pl).join('|');
+    const fresh = key !== container._enterKey;
+    container._enterKey = key;
+    $$('.rows, .grid, .carousel', container).forEach((list) => {
+      if (!fresh) return;
+      [...list.children].forEach((el, i) => { if (i < 16) el.style.setProperty('--i', i); });
+      list.classList.remove('anim'); void list.offsetWidth; list.classList.add('anim');
+    });
+  },
+  /* ---- collapsing large title, playlist parallax ---- */
+  onScroll() {
+    if (this.raf) return;
+    this.raf = requestAnimationFrame(() => {
+      this.raf = 0;
+      const views = $('#views'), y = views.scrollTop;
+      const view = $('.view:not([hidden])');
+      if (!view) return;
+      const title = view.querySelector('.big-title');
+      const isPl = view.dataset.view === 'playlist';
+      const p = isPl ? clamp((y - 180) / 60, 0, 1) : clamp((y - 10) / 40, 0, 1);
+      $('#app').style.setProperty('--nav-p', p.toFixed(3));
+      $('#nav-title').textContent = isPl ? $('#pl-name').textContent : (title?.textContent || '');
+      if (title) {
+        const pull = Math.max(0, -y); // iOS rubber-band: the title grows a little when pulled down
+        title.style.transform = `scale(${1 + Math.min(pull, 120) / 900})`;
+        title.style.opacity = String(1 - clamp((y - 6) / 34, 0, 1));
+      }
+      if (isPl && !this.reduce.matches) {
+        // the cover lags behind the scroll a little and shrinks from its top edge, so it never covers the title
+        const k = clamp(y / 220, 0, 1);
+        $('#pl-cover').style.transform = `translateY(${Math.max(0, y) * 0.18}px) scale(${1 - k * 0.2})`;
+        $('#pl-cover').style.opacity = String(1 - clamp(y / 190, 0, 1));
+      }
+    });
+  },
+  rememberScroll(key) { this.scrollPos[key] = $('#views').scrollTop; },
+  restoreScroll(key) { $('#views').scrollTop = this.scrollPos[key] || 0; this.onScroll(); },
+  playIn(view, kind = 'enter') {
+    if (this.reduce.matches || !view) return;
+    view.classList.remove('enter', 'enter-push', 'enter-pop'); void view.offsetWidth; view.classList.add(kind);
+    setTimeout(() => view.classList.remove(kind), 450);
+  },
+  pop(el) { if (!el) return; el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); },
+
+  /* ---- Now Playing: the cover flies between the mini player and full screen ---- */
+  fly(fromEl, toEl, back) {
+    if (this.reduce.matches || !fromEl || !toEl) return null;
+    const a = fromEl.getBoundingClientRect(), b = toEl.getBoundingClientRect();
+    if (!a.width || !b.width) return null;
+    const clone = (back ? toEl : fromEl).cloneNode(true);
+    clone.removeAttribute('id'); clone.className = 'art art-flight';
+    Object.assign(clone.style, { left: a.left + 'px', top: a.top + 'px', width: a.width + 'px', height: a.height + 'px' });
+    document.body.appendChild(clone);
+    const sx = b.width / a.width, dx = b.left - a.left, dy = b.top - a.top;
+    const anim = clone.animate([
+      { transform: 'translate(0,0) scale(1)', borderRadius: back ? '14px' : '6px' },
+      { transform: `translate(${dx}px,${dy}px) scale(${sx})`, borderRadius: back ? `${6 / sx}px` : `${14 / sx}px` },
+    ], { duration: 480, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+    anim.onfinish = () => clone.remove();
+    return anim;
+  },
+  /* where the Now Playing cover will be once the sheet is fully open */
+  npArtTarget() {
+    const art = $('#np-art');
+    if (!art || art.hidden) return null;
+    const np = $('#np'), r = art.getBoundingClientRect();
+    const m = new DOMMatrixReadOnly(getComputedStyle(np).transform);
+    return { getBoundingClientRect: () => ({ left: r.left, top: r.top - m.m42, width: r.width, height: r.height }) };
+  },
+  openNP() {
+    const np = $('#np'), mini = $('#mini-art');
+    document.body.classList.add('np-open'); document.body.style.setProperty('--np-k', 1);
+    const target = UI.npMode === 'art' && !$('#mini').hidden ? this.npArtTarget() : null;
+    if (target) {
+      const art = $('#np-art'); art.style.visibility = 'hidden'; mini.style.visibility = 'hidden';
+      const anim = this.fly(mini, target, false);
+      const done = () => { art.style.visibility = ''; mini.style.visibility = ''; };
+      if (anim) anim.finished.then(done, done); else done();
+    }
+    np.classList.add('open');
+  },
+  closeNP() {
+    const np = $('#np');
+    if (UI.npMode === 'art' && !$('#mini').hidden && np.classList.contains('open')) {
+      const art = $('#np-art'), mini = $('#mini-art');
+      const anim = this.fly(art, mini, true);
+      if (anim) { art.style.visibility = 'hidden'; mini.style.visibility = 'hidden'; const done = () => { art.style.visibility = ''; mini.style.visibility = ''; }; anim.finished.then(done, done); }
+    }
+    np.classList.remove('open'); np.style.transform = '';
+    document.body.classList.remove('np-open'); document.body.style.removeProperty('--np-k');
+  },
+  /* drag the Now Playing sheet down; the library behind it follows */
+  bindNpDrag() {
+    const np = $('#np');
+    let y0 = null, x0 = 0, dy = 0, t0 = 0, active = false;
+    np.addEventListener('touchstart', (e) => {
+      if (e.target.closest('input,canvas,.np-lyrics,button:not(#np-close)')) { y0 = null; return; }
+      y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; dy = 0; t0 = performance.now(); active = false;
+    }, { passive: true });
+    np.addEventListener('touchmove', (e) => {
+      if (y0 == null) return;
+      const ty = e.touches[0].clientY - y0, tx = e.touches[0].clientX - x0;
+      if (!active) { if (ty > 8 && ty > Math.abs(tx)) { active = true; document.body.classList.add('np-dragging'); } else if (Math.abs(tx) > 8 || ty < -8) { y0 = null; return; } else return; }
+      dy = Math.max(0, ty);
+      np.style.transform = `translateY(${dy}px)`;
+      document.body.style.setProperty('--np-k', String(1 - clamp(dy / innerHeight, 0, 1)));
+    }, { passive: true });
+    const end = () => {
+      if (y0 == null) return;
+      y0 = null;
+      if (!active) return;
+      document.body.classList.remove('np-dragging');
+      const v = dy / Math.max(1, performance.now() - t0); // px per ms
+      if (dy > innerHeight * 0.22 || v > 0.6) UI.closeNP();
+      else { np.style.transform = ''; document.body.style.setProperty('--np-k', 1); }
+    };
+    np.addEventListener('touchend', end); np.addEventListener('touchcancel', end);
+  },
+
+  /* ---- long-press a song for its menu ---- */
+  bindLongPress() {
+    let timer = null, start = null, row = null;
+    const cancel = () => { clearTimeout(timer); timer = null; if (row) row.classList.remove('held'); row = null; };
+    document.addEventListener('pointerdown', (e) => {
+      const r = e.target.closest('.row[data-id]');
+      if (!r || e.target.closest('[data-act="menu"]') || e.button > 0) return;
+      cancel(); row = r; start = [e.clientX, e.clientY];
+      timer = setTimeout(() => {
+        timer = null; this.suppressClick = Date.now() + 600;
+        r.classList.add('held'); this.haptic(10);
+        setTimeout(() => r.classList.remove('held'), 260);
+        UI.trackMenu(r.dataset.id, r.querySelector('[data-ctx]')?.dataset.ctx);
+        row = null;
+      }, 480);
+    });
+    document.addEventListener('pointermove', (e) => { if (timer && start && Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 8) cancel(); });
+    document.addEventListener('pointerup', () => { if (timer) cancel(); });
+    document.addEventListener('pointercancel', cancel);
+    document.addEventListener('scroll', cancel, true);
+    document.addEventListener('contextmenu', (e) => {
+      const r = e.target.closest('.row[data-id]'); if (!r) return;
+      e.preventDefault(); UI.trackMenu(r.dataset.id, r.querySelector('[data-ctx]')?.dataset.ctx);
+    });
+    // a long-press must not also play the song
+    document.addEventListener('click', (e) => { if (this.suppressClick && Date.now() < this.suppressClick && e.target.closest('.row')) { e.stopPropagation(); e.preventDefault(); this.suppressClick = 0; } }, true);
+  },
+
+  /* ---- swipe the mini player left / right to skip ---- */
+  bindMiniSwipe() {
+    const main = $('#mini-open');
+    let x0 = null, y0 = 0, dx = 0, dragging = false;
+    main.addEventListener('pointerdown', (e) => { x0 = e.clientX; y0 = e.clientY; dx = 0; dragging = false; });
+    main.addEventListener('pointermove', (e) => {
+      if (x0 == null) return;
+      const tx = e.clientX - x0, ty = e.clientY - y0;
+      if (!dragging) { if (Math.abs(tx) > 10 && Math.abs(tx) > Math.abs(ty)) { dragging = true; main.setPointerCapture(e.pointerId); } else return; }
+      dx = tx; main.style.transition = 'none';
+      main.style.transform = `translateX(${dx * 0.6}px)`; main.style.opacity = String(1 - Math.min(0.6, Math.abs(dx) / 300));
+    });
+    const end = () => {
+      if (x0 == null) return;
+      x0 = null; main.style.transition = ''; main.style.transform = ''; main.style.opacity = '';
+      if (!dragging) return;
+      this.suppressMiniClick = Date.now() + 400;
+      if (dx < -70) { this.haptic(); this.swapDir = 'right'; Player.next(true); }
+      else if (dx > 70) { this.haptic(); this.swapDir = 'left'; Player.prev(); }
+    };
+    main.addEventListener('pointerup', end); main.addEventListener('pointercancel', end);
+  },
+
+  /* ---- sheets: animate out, drag down to dismiss ---- */
+  closeSheet(done) {
+    const sheet = $('#sheet'), scrim = $('#scrim');
+    if (sheet.hidden) { done && done(); return; }
+    if (this.reduce.matches) { done(); return; }
+    sheet.classList.add('closing'); scrim.classList.add('closing');
+    setTimeout(() => { sheet.classList.remove('closing'); scrim.classList.remove('closing'); sheet.style.transform = ''; done && done(); }, 240);
+  },
+  bindSheetDrag() {
+    const sheet = $('#sheet'), body = $('#sheet-body');
+    let y0 = null, dy = 0, active = false;
+    sheet.addEventListener('touchstart', (e) => {
+      const onGrab = e.target.closest('.sheet-grab');
+      if (!onGrab && (body.scrollTop > 0 || e.target.closest('input,textarea,select'))) { y0 = null; return; }
+      y0 = e.touches[0].clientY; dy = 0; active = false;
+    }, { passive: true });
+    sheet.addEventListener('touchmove', (e) => {
+      if (y0 == null) return;
+      const ty = e.touches[0].clientY - y0;
+      if (!active) { if (ty > 8) active = true; else if (ty < -4) { y0 = null; return; } else return; }
+      dy = Math.max(0, ty); sheet.style.animation = 'none'; sheet.style.transition = 'none'; sheet.style.transform = `translateY(${dy}px)`;
+    }, { passive: true });
+    sheet.addEventListener('touchend', () => {
+      if (y0 == null) return;
+      y0 = null; sheet.style.transition = 'transform .3s cubic-bezier(.2,.8,.2,1)';
+      if (active && dy > 110) UI.closeSheet();
+      else sheet.style.transform = '';
+      setTimeout(() => { sheet.style.transition = ''; sheet.style.animation = ''; }, 320);
+    });
+  },
+  bind() {
+    $('#views').addEventListener('scroll', () => this.onScroll(), { passive: true });
+    this.bindNpDrag(); this.bindLongPress(); this.bindMiniSwipe(); this.bindSheetDrag();
+    $('#mini-open').addEventListener('click', (e) => { if (this.suppressMiniClick && Date.now() < this.suppressMiniClick) { e.stopImmediatePropagation(); } }, true);
+  },
+};
+
+/* =========================================================================
  * Boot
  * ========================================================================= */
 async function boot() {
@@ -2268,9 +2517,9 @@ async function boot() {
   }
   window.__mazj = { Engine, Player, Lib, UI, settings, Local, Tags, Lyrics, Analysis, Stretch }; // for debugging
   const open = async () => {
-    toast('Loading your library…', 0);
     try { await Lib.load(); $('#toast').hidden = true; }
-    catch (e) { if (!/unauthorized/.test(e.message)) toast('Couldn’t load your library. Check your connection.'); return; }
+    catch (e) { UI.loading = false; UI.renderLibrary(); if (!/unauthorized/.test(e.message)) toast('Couldn’t load your library. Check your connection.'); return; }
+    UI.loading = false;
     await Local.check();
     UI.render();
     if (Local.count) toast(`${songsLabel(Local.count)} on this device can be uploaded to your cloud library`, 3500);
