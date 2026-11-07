@@ -26,11 +26,11 @@ function cleanTrack(t) {
     id: t.id, audio: t.audio, art: t.art || null,
     title: TEXT(t.title) || 'Untitled', artist: TEXT(t.artist) || 'Unknown Artist', album: TEXT(t.album),
     duration: NUM(t.duration) || 0, bpm: NUM(t.bpm), beatOffset: NUM(t.beatOffset),
-    analyzed: !!t.analyzed, fav: !!t.fav, demo: !!t.demo, size: NUM(t.size) || 0,
+    analyzed: !!t.analyzed, beatConf: NUM(t.beatConf), gridV: NUM(t.gridV), fav: !!t.fav, demo: !!t.demo, size: NUM(t.size) || 0,
     addedAt: NUM(t.addedAt) || Date.now(),
   };
 }
-const PATCHABLE = { title: TEXT, artist: TEXT, album: TEXT, fav: (v) => !!v, bpm: NUM, beatOffset: NUM, analyzed: (v) => !!v, duration: NUM };
+const PATCHABLE = { title: TEXT, artist: TEXT, album: TEXT, fav: (v) => !!v, bpm: NUM, beatOffset: NUM, beatConf: NUM, gridV: NUM, analyzed: (v) => !!v, duration: NUM };
 
 function cleanPlaylist(p, tracks) {
   if (!p || typeof p.id !== 'string' || !/^[\w-]{6,64}$/.test(p.id)) throw new Error('bad playlist id');

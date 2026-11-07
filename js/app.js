@@ -224,6 +224,8 @@ const Tags = (() => {
 /* =========================================================================
  * Analysis — waveform peaks, BPM and first-beat offset
  * ========================================================================= */
+const GRID_V = 2;
+const ONSET_LAG = 0; // seconds between a beat and where its onset shows in the envelope (calibrated by test)
 const Analysis = (() => {
   const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   const SR = 22050;
@@ -307,14 +309,93 @@ const Analysis = (() => {
     offset = offset % per;
     return { bpm, beatOffset: offset };
   }
-  async function run(blob) {
+  /* Precise beat grid over the whole song.
+   * 1. onset envelope (kick-weighted energy rises) for every ~5.8 ms of audio
+   * 2. coarse tempo from tempo() above
+   * 3. refine: for tempos within ±1.5 BPM (0.01 steps) measure how strongly the onsets repeat at
+   *    that period across the WHOLE song (a single Fourier bin); the strongest wins, and the
+   *    phase of that bin is where the beats fall. Confidence = how much of the onset energy lines up. */
+  function onsets(ch, sr) {
+    const hop = Math.max(64, Math.round(sr / 172)), n = Math.floor(ch.length / hop);
+    const a = 1 - Math.exp(-2 * Math.PI * 160 / sr);
+    const lowE = new Float32Array(n), fullE = new Float32Array(n);
+    let lp = 0;
+    for (let f = 0; f < n; f++) {
+      let el = 0, ef = 0;
+      const o = f * hop;
+      for (let j = 0; j < hop; j++) { const x = ch[o + j]; lp += a * (x - lp); el += lp * lp; ef += x * x; }
+      lowE[f] = el; fullE[f] = ef;
+    }
+    const env = new Float32Array(n);
+    for (let f = 2; f < n; f++) {
+      const l1 = Math.log(1e-7 + lowE[f] + lowE[f - 1]), l0 = Math.log(1e-7 + lowE[f - 1] + lowE[f - 2]);
+      const f1 = Math.log(1e-7 + fullE[f] + fullE[f - 1]), f0 = Math.log(1e-7 + fullE[f - 1] + fullE[f - 2]);
+      env[f] = Math.max(0, l1 - l0) * 1.6 + Math.max(0, f1 - f0);
+    }
+    // subtract a moving average so only the peaks remain
+    const w = 32, out = new Float32Array(n);
+    let s = 0;
+    for (let f = 0; f < n; f++) {
+      s += env[f]; if (f >= w) s -= env[f - w];
+      out[f] = Math.max(0, env[f] - s / Math.min(f + 1, w));
+    }
+    return { env: out, fps: sr / hop, hop };
+  }
+  function bin(env, fps, bpm) {
+    const w = 2 * Math.PI * bpm / 60 / fps;
+    // rotate a unit phasor instead of calling cos/sin per sample
+    const cw = Math.cos(w), sw = Math.sin(w);
+    let c = 1, s = 0, re = 0, im = 0;
+    for (let n = 0; n < env.length; n++) {
+      const v = env[n];
+      if (v) { re += v * c; im -= v * s; }
+      const c2 = c * cw - s * sw; s = s * cw + c * sw; c = c2;
+      if ((n & 1023) === 0) { const m = Math.hypot(c, s); c /= m; s /= m; }
+    }
+    return { mag: Math.hypot(re, im), ang: Math.atan2(im, re) };
+  }
+  function grid(ch, sr, hint) {
+    const { env, fps, hop } = onsets(ch, sr);
+    let total = 0; for (let i = 0; i < env.length; i++) total += env[i];
+    if (!total) return null;
+    // 1. scan 70–180 BPM over the whole song, gently preferring the usual dance range
+    let best = null;
+    const consider = (bpm, weight) => { const r = bin(env, fps, bpm); const sc = r.mag * weight; if (!best || sc > best.sc) best = { ...r, bpm, sc }; };
+    for (let bpm = 70; bpm <= 180; bpm += 0.5) consider(bpm, 0.7 + 0.3 * Math.exp(-0.5 * Math.pow(Math.log2(bpm / 120) / 0.7, 2)));
+    if (hint) for (let bpm = hint - 1; bpm <= hint + 1; bpm += 0.25) consider(bpm, 1.05); // a tag's tempo is a strong hint
+    // 2. refine around the winner: ±0.6 BPM in 0.02 steps, then ±0.03 in 0.002 steps
+    const refine = (span, step) => { const c = best.bpm; for (let bpm = c - span; bpm <= c + span; bpm += step) { const r = bin(env, fps, bpm); if (r.mag > best.mag) best = { ...r, bpm, sc: best.sc }; } };
+    refine(0.6, 0.02); refine(0.03, 0.002);
+    const bpm = Math.round(best.bpm * 100) / 100;
+    const perF = fps * 60 / bpm;
+    // phase → first beat; the onset of a frame shows up about one hop late
+    let n0 = (-best.ang / (2 * Math.PI)) * perF;
+    n0 = ((n0 % perF) + perF) % perF;
+    const per = 60 / bpm;
+    // the Fourier phase follows the centre of each onset bump; sharpen it to the bump peaks
+    const at = (x) => { const i = Math.floor(x); if (i < 0 || i + 1 >= env.length) return 0; return env[i] + (env[i + 1] - env[i]) * (x - i); };
+    let bestD = 0, bestS = -1;
+    for (let d = -0.06 * fps; d <= 0.06 * fps; d += 0.25) {
+      let sc = 0; for (let x = n0 + d; x < env.length; x += perF) sc += at(x);
+      if (sc > bestS) { bestS = sc; bestD = d; }
+    }
+    n0 += bestD;
+    let beatOffset = (n0 * hop + ONSET_LAG * sr) / sr;
+    beatOffset = ((beatOffset % per) + per) % per;
+    const conf = best.mag / total;
+    return { bpm, beatOffset, conf: Math.round(conf * 1000) / 1000 };
+  }
+  async function run(blob, hint) {
     const buf = await decode(await blob.arrayBuffer());
     const ch = buf.getChannelData(0);
-    const t = tempo(ch, buf.sampleRate);
-    return { peaks: peaks(ch), duration: buf.duration, bpm: t?.bpm, beatOffset: t?.beatOffset };
+    const g = grid(ch, buf.sampleRate, hint);
+    return { duration: buf.duration, bpm: g?.bpm, beatOffset: g?.beatOffset, beatConf: g?.conf ?? 0, gridV: GRID_V };
   }
-  function fromBuffer(buf) { const t = tempo(buf.getChannelData(0), buf.sampleRate); return { bpm: t?.bpm, beatOffset: t?.beatOffset }; }
-  return { run, fromBuffer };
+  function fromBuffer(buf, hint) {
+    const g = grid(buf.getChannelData(0), buf.sampleRate, hint);
+    return { bpm: g?.bpm, beatOffset: g?.beatOffset, beatConf: g?.conf ?? 0, gridV: GRID_V };
+  }
+  return { run, fromBuffer, grid };
 })();
 
 /* =========================================================================
@@ -418,13 +499,13 @@ async function addFiles(files) {
     }
     // tempo analysis runs on this device once, before upload, so AutoMix can beat-match anywhere
     let a = null;
-    try { toast(`Analyzing ${i} of ${files.length}…`, 0); a = await Analysis.run(f); } catch (e) { console.warn('analysis failed', e); }
+    try { toast(`Analyzing ${i} of ${files.length}…`, 0); a = await Analysis.run(f, tags.bpm); } catch (e) { console.warn('analysis failed', e); }
     try {
       const id = uid();
       await uploadTrack({
         id, fileName: f.name, title, artist: artist || 'Unknown Artist', album: tags.album || '',
-        duration: dur || a?.duration || 0, bpm: tags.bpm || a?.bpm || null, beatOffset: a?.beatOffset ?? null,
-        analyzed: !!a, addedAt: Date.now(),
+        duration: dur || a?.duration || 0, bpm: a?.bpm || tags.bpm || null, beatOffset: a?.beatOffset ?? null,
+        beatConf: a?.beatConf ?? null, gridV: a ? GRID_V : null, analyzed: !!a, addedAt: Date.now(),
       }, f, tags.art, label);
       // lyrics stored inside the file are kept, so they show without a search
       if (tags.lyrics) await Api.call('/api/lyrics?id=' + id, { method: 'POST', body: JSON.stringify({ text: tags.lyrics, source: 'file' }) }).catch(() => {});
@@ -684,13 +765,13 @@ function mixPoints(buf) {
 
 /* Songs added without tempo info get analysed the first time they're played. */
 function analyzeIfNeeded(track, buf) {
-  if (track.analyzed || track.demo) return;
-  track.analyzed = true;
+  if (track.demo || track.gridV >= GRID_V || track._analysing) return;
+  track._analysing = true;
   setTimeout(() => {
     try {
-      const r = Analysis.fromBuffer(buf);
-      const patch = { analyzed: true };
-      if (!track.bpm && r.bpm) patch.bpm = r.bpm;
+      const r = Analysis.fromBuffer(buf, track.bpm);
+      const patch = { analyzed: true, gridV: GRID_V, beatConf: r.beatConf };
+      if (r.bpm) patch.bpm = r.bpm;
       if (r.beatOffset != null) patch.beatOffset = r.beatOffset;
       Object.assign(track, patch);
       Lib.updateTrack(track.id, patch).catch(() => {});
@@ -893,17 +974,37 @@ const Player = {
     if (this.repeat === 'one') return this.qi;
     return this.hasNext() ? this.nextIndex() : -1;
   },
-  /* When to start blending out of a deck: the blend is a whole number of bars long,
-   * starts on a bar line, and finishes before the song's fade-out. */
-  plan(from) {
+  /* Can these two songs be beat-matched? Returns the rate for the incoming song so its beats
+   * land on the outgoing beats (same tempo within 6 %, or double / half time), or null. */
+  tempoMatch(from, toTrack) {
+    if (!settings.smartMix) return null;
+    const a = from.track, b = toTrack;
+    if (!a?.bpm || !b?.bpm) return null;
+    if ((a.beatConf ?? 1) < 0.04 || (b.beatConf ?? 1) < 0.04) return null; // beat grid not trustworthy
+    const out = a.bpm * from.rate;
+    for (const mult of [1, 2, 0.5]) { const rate = out / (b.bpm * mult); if (Math.abs(rate - 1) <= 0.06) return { rate, mult }; }
+    return null;
+  },
+  /* When and how to leave a song.
+   * blend: tempos match → a long, beat-matched blend, a whole number of bars, starting on a bar line.
+   * fade:  tempos don't match → a short transition of a few beats so two rhythms never clash. */
+  plan(from, toTrack) {
     const out = from.points?.mixOut || from.duration;
-    const t = from.track, bar = t?.bpm ? 240 / t.bpm : 0;
-    let len = settings.crossfade;
-    if (bar) len = Math.max(2, Math.round(len / bar)) * bar;
+    const t = from.track, beat = t?.bpm ? 60 / t.bpm : 0, bar = beat * 4;
+    const match = this.tempoMatch(from, toTrack);
+    let len, style;
+    if (match || !settings.smartMix) { // with Smart Mix off: a plain crossfade of the chosen length
+      style = 'blend'; len = settings.crossfade;
+      if (bar) len = Math.max(2, Math.round(len / bar)) * bar;
+    } else {
+      style = 'fade';
+      len = Math.min(settings.crossfade, beat ? beat * Math.max(2, Math.round(3 / beat)) : 3);
+    }
     len = Math.min(len, out * 0.4);
     let start = out - len;
-    if (bar) { const off = t.beatOffset || 0; start = off + Math.floor((start - off) / bar) * bar; }
-    return { start: Math.max(0, start), len };
+    const step = style === 'blend' ? bar : beat;
+    if (step) { const off = t.beatOffset || 0; start = off + Math.floor((start - off) / step) * step; }
+    return { start: Math.max(0, start), len, style };
   },
   /* Where the incoming song enters: after its silence or quiet intro, on a bar line. */
   entryPoint(d) {
@@ -926,42 +1027,52 @@ const Player = {
     if (!this.mixing) return; // cancelled while loading
     this.qi = i;
     const ctx = Engine.ensure(), now = ctx.currentTime + 0.05;
-    let when = now, len;
-    if (quick) len = Math.min(settings.crossfade || 4, 4) * from.rate;
-    else {
-      const p = this.plan(from);
-      len = p.len;
+    let when = now, len, style;
+    if (quick) {
+      style = this.tempoMatch(from, t) ? 'blend' : 'fade';
+      len = (style === 'blend' ? Math.min(settings.crossfade || 4, 4) : 2) * from.rate;
+    } else {
+      const p = this.plan(from, t);
+      len = p.len; style = p.style;
       if (from.time < p.start) when = now + (p.start - from.time) / from.rate;
       else len = Math.max(1, Math.min(len, from.duration - from.time - 0.1));
     }
-    this.startMix(from, to, len / from.rate, when);
+    this.startMix(from, to, len / from.rate, when, style);
   },
   /* blend deck `to` in over `dur` seconds, starting at audio-clock time `when` */
-  startMix(from, to, dur, when) {
+  startMix(from, to, dur, when, style = 'blend') {
     const ctx = Engine.ensure();
     when = Math.max(when || 0, ctx.currentTime + 0.02);
     this.mixing = this.mixing || { from, to, i: this.qi };
     const smart = settings.smartMix;
     // Freeze any post-mix tempo recovery before calculating the next beat grid.
     from.stopGlide(); to.stopGlide();
-    const r = (from.track?.bpm * from.rate) / to.track?.bpm;
-    const sync = smart && Number.isFinite(r) && r > 0 && Math.abs(r - 1) <= 0.06;
-    const separated = smart && !sync;
-    const ratio = sync ? r : 1;
+    const match = style === 'blend' ? this.tempoMatch(from, to.track) : null;
+    // Incompatible rhythms must not play together: the old song fades out, then the new one fades in.
+    const separated = smart && style === 'fade';
     if (separated) dur = Math.min(dur, 0.8);
     const remaining = (from.duration - from.time) / from.rate - (when - ctx.currentTime);
     dur = Math.max(0.02, Math.min(dur, remaining - 0.02));
     to.pause();
-    to.setRate(ratio);
+    to.setRate(match ? match.rate : 1);
     let start = this.entryPoint(to);
-    if (sync && from.playing) {
-      // land the incoming beat exactly on the outgoing beat
+    if (match && from.playing) {
+      // land the incoming beat exactly on the outgoing beat (counting in the incoming song's beats)
       const at = from.time + (when - ctx.currentTime) * from.rate;
-      start += (from.phase(at) || 0) * 60 / to.track.bpm;
+      const beats = (at - (from.track.beatOffset || 0)) / (60 / from.track.bpm) / match.mult;
+      start += (beats - Math.floor(beats)) * 60 / to.track.bpm;
     }
     to.seek(Math.min(start, Math.max(0, to.duration - dur * to.rate - 1)));
-    to.play(when);
-    if (sync) {
+    if (separated) {
+      // the new song starts as its fade-in begins, so its first beat is heard, not lost in silence;
+      // the old song is filtered away while it fades out
+      to.play(when + dur * 0.5);
+      if (Math.abs(from.filterVal) < 0.02) {
+        const f = from.flt.frequency;
+        f.cancelScheduledValues(0); f.setValueAtTime(22000, ctx.currentTime); f.setValueAtTime(22000, when); f.exponentialRampToValueAtTime(400, when + dur * 0.5);
+      }
+    } else to.play(when);
+    if (smart && style === 'blend') {
       // bass swap halfway through, and the outgoing song is gently filtered as it leaves
       const mid = when + dur * 0.5;
       const lowIn = to.low.gain, lowOut = from.low.gain;
@@ -1003,11 +1114,11 @@ const Player = {
     const d = this.live;
     if (!settings.autoMix || this.mixing || !d.playing || !d.buffer || settings.crossfade <= 0) return;
     if (d.duration < settings.crossfade * 2.5) return;
-    const p = this.plan(d);
-    const until = (p.start - d.time) / (d.rate || 1); // seconds until the blend should begin
-    if (until > 30) return;
     const ni = this.upcomingIndex();
     if (ni < 0) return;
+    const p = this.plan(d, Lib.tracks.get(this.queue[ni]));
+    const until = (p.start - d.time) / (d.rate || 1); // seconds until the transition should begin
+    if (until > 30) return;
     const nid = this.queue[ni], other = Engine.other(d);
     // load the next song ~30 s ahead so the blend starts exactly on time
     if ((other.preloadedFor !== nid || other.track?.id !== nid) && !other.loading && Lib.tracks.has(nid)) {
@@ -1567,7 +1678,7 @@ const Demo = {
       for (const def of this.defs) {
         const { blob, duration } = await this.render(def);
         const id = uid();
-        await uploadTrack({ id, fileName: id + '.wav', title: def.title, artist: def.artist, album: 'Demo Tracks', duration, bpm: def.bpm, beatOffset: 0.05, analyzed: true, demo: true, addedAt: Date.now() }, blob, null, `Uploading demo ${ids.length + 1} of 3`);
+        await uploadTrack({ id, fileName: id + '.wav', title: def.title, artist: def.artist, album: 'Demo Tracks', duration, bpm: def.bpm, beatOffset: 0.05, beatConf: 1, gridV: GRID_V, analyzed: true, demo: true, addedAt: Date.now() }, blob, null, `Uploading demo ${ids.length + 1} of 3`);
         ids.push(id);
       }
     } catch (e) { console.error(e); toast('Couldn’t generate the demo tracks'); return; }
@@ -2017,7 +2128,7 @@ async function boot() {
   if ('serviceWorker' in navigator && /^https:|^http:\/\/localhost/.test(location.href) && !window.__NO_SW__) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  window.__mazj = { Engine, Player, Lib, UI, settings, Local, Tags, Lyrics }; // for debugging
+  window.__mazj = { Engine, Player, Lib, UI, settings, Local, Tags, Lyrics, Analysis }; // for debugging
   const open = async () => {
     toast('Loading your library…', 0);
     try { await Lib.load(); $('#toast').hidden = true; }
