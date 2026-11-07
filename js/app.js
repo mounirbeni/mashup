@@ -224,7 +224,8 @@ const Tags = (() => {
 /* =========================================================================
  * Analysis — waveform peaks, BPM and first-beat offset
  * ========================================================================= */
-const GRID_V = 2;
+const GRID_V = 3;
+const FIT_MIN = 2; // songs whose beats stand out less than this are never beat-matched
 const ONSET_LAG = 0; // seconds between a beat and where its onset shows in the envelope (calibrated by test)
 const Analysis = (() => {
   const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -326,11 +327,12 @@ const Analysis = (() => {
       for (let j = 0; j < hop; j++) { const x = ch[o + j]; lp += a * (x - lp); el += lp * lp; ef += x * x; }
       lowE[f] = el; fullE[f] = ef;
     }
-    const env = new Float32Array(n);
+    const env = new Float32Array(n), kick = new Float32Array(n);
     for (let f = 2; f < n; f++) {
       const l1 = Math.log(1e-7 + lowE[f] + lowE[f - 1]), l0 = Math.log(1e-7 + lowE[f - 1] + lowE[f - 2]);
       const f1 = Math.log(1e-7 + fullE[f] + fullE[f - 1]), f0 = Math.log(1e-7 + fullE[f - 1] + fullE[f - 2]);
-      env[f] = Math.max(0, l1 - l0) * 1.6 + Math.max(0, f1 - f0);
+      kick[f] = Math.max(0, l1 - l0);
+      env[f] = kick[f] * 1.6 + Math.max(0, f1 - f0);
     }
     // subtract a moving average so only the peaks remain
     const w = 32, out = new Float32Array(n);
@@ -339,7 +341,7 @@ const Analysis = (() => {
       s += env[f]; if (f >= w) s -= env[f - w];
       out[f] = Math.max(0, env[f] - s / Math.min(f + 1, w));
     }
-    return { env: out, fps: sr / hop, hop };
+    return { env: out, kick, fps: sr / hop, hop };
   }
   function bin(env, fps, bpm) {
     const w = 2 * Math.PI * bpm / 60 / fps;
@@ -355,7 +357,7 @@ const Analysis = (() => {
     return { mag: Math.hypot(re, im), ang: Math.atan2(im, re) };
   }
   function grid(ch, sr, hint) {
-    const { env, fps, hop } = onsets(ch, sr);
+    const { env, kick, fps, hop } = onsets(ch, sr);
     let total = 0; for (let i = 0; i < env.length; i++) total += env[i];
     if (!total) return null;
     // 1. scan 70–180 BPM over the whole song, gently preferring the usual dance range
@@ -365,7 +367,24 @@ const Analysis = (() => {
     if (hint) for (let bpm = hint - 1; bpm <= hint + 1; bpm += 0.25) consider(bpm, 1.05); // a tag's tempo is a strong hint
     // 2. refine around the winner: ±0.6 BPM in 0.02 steps, then ±0.03 in 0.002 steps
     const refine = (span, step) => { const c = best.bpm; for (let bpm = c - span; bpm <= c + span; bpm += step) { const r = bin(env, fps, bpm); if (r.mag > best.mag) best = { ...r, bpm, sc: best.sc }; } };
-    refine(0.6, 0.02); refine(0.03, 0.002);
+    refine(0.6, 0.02);
+    // 3. the scan can lock onto a related tempo (×3/2 with off-beat-heavy grooves, ×2, ×½):
+    //    keep the candidate whose grid lands on the most real hits, measured directly
+    const atE = (x) => { const i = Math.floor(x); if (i < 0 || i + 1 >= env.length) return 0; return env[i] + (env[i + 1] - env[i]) * (x - i); };
+    const comb = (bpm) => {
+      const perF = fps * 60 / bpm; let bestAvg = 0;
+      for (let ph = 0; ph < perF; ph += 0.5) { let s = 0, c = 0; for (let x = ph; x < env.length; x += perF) { s += atE(x); c++; } if (s / c > bestAvg) bestAvg = s / c; }
+      return bestAvg;
+    };
+    const base = best.bpm, prior = (b) => 0.85 + 0.15 * Math.exp(-0.5 * Math.pow(Math.log2(b / 120) / 0.7, 2));
+    let pick = base, pickScore = comb(base) * prior(base);
+    for (const m of [2 / 3, 3 / 2, 1 / 2, 2]) {
+      const b = base * m; if (b < 70 || b > 180) continue;
+      const sc = comb(b) * prior(b);
+      if (sc > pickScore * 1.05) { pick = b; pickScore = sc; }
+    }
+    if (pick !== base) { const r = bin(env, fps, pick); best = { ...r, bpm: pick, sc: best.sc }; refine(0.6, 0.02); }
+    refine(0.03, 0.002);
     const bpm = Math.round(best.bpm * 100) / 100;
     const perF = fps * 60 / bpm;
     // phase → first beat; the onset of a frame shows up about one hop late
@@ -380,10 +399,25 @@ const Analysis = (() => {
       if (sc > bestS) { bestS = sc; bestD = d; }
     }
     n0 += bestD;
-    let beatOffset = (n0 * hop + ONSET_LAG * sr) / sr;
-    beatOffset = ((beatOffset % per) + per) % per;
-    const conf = best.mag / total;
-    return { bpm, beatOffset, conf: Math.round(conf * 1000) / 1000 };
+    // the beat is where the kick lands: in afrobeats, amapiano, reggaeton… off-beat claps and
+    // shakers can be louder than the kick and pull the grid half a beat off
+    const kat = (x) => { const c = Math.round(x); let m = 0; for (let i = c - 2; i <= c + 2; i++) if (i >= 0 && i < kick.length && kick[i] > m) m = kick[i]; return m; };
+    const kickAvg = (s0) => { let sum = 0, c = 0; for (let x = s0; x < kick.length; x += perF) { sum += kat(x); c++; } return sum / Math.max(1, c); };
+    const kOn = kickAvg(n0), kHalf = kickAvg(n0 + perF / 2);
+    if (kHalf > kOn * 1.25) n0 = (n0 + perF / 2) % perF;
+    // downbeat: the beat of the bar where the kick hits hardest (beat 1), when it's clear
+    const bars = [0, 0, 0, 0];
+    for (let x = n0, k = 0; x < kick.length; x += perF, k++) bars[k % 4] += kat(x);
+    const order = bars.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]);
+    const db = order[0][0] > order[1][0] * 1.08 ? order[0][1] : 0;
+    // confidence: how far the onsets on this grid stand out from the song's average onset
+    let gs = 0, gc = 0;
+    for (let x = n0; x < env.length; x += perF) { gs += at(x); gc++; }
+    const fit = (gs / Math.max(1, gc)) / (total / env.length);
+    const bar = per * 4;
+    let beatOffset = ((n0 + db * perF) * hop + ONSET_LAG * sr) / sr; // a downbeat: bars count from here
+    beatOffset = ((beatOffset % bar) + bar) % bar;
+    return { bpm, beatOffset, conf: Math.round(fit * 100) / 100, kickShift: kHalf > kOn * 1.25, downbeat: db };
   }
   async function run(blob, hint) {
     const buf = await decode(await blob.arrayBuffer());
@@ -1083,8 +1117,7 @@ const Player = {
   tempoMatch(from, toTrack) {
     if (!settings.smartMix) return null;
     const a = from.track, b = toTrack;
-    if (!a?.bpm || !b?.bpm) return null;
-    if ((a.beatConf ?? 1) < 0.04 || (b.beatConf ?? 1) < 0.04) return null; // beat grid not trustworthy
+    if (!this.beatReliable(a) || !this.beatReliable(b)) return null; // never align songs on a doubtful grid
     const out = a.bpm * from.rate;
     let best = null;
     for (const mult of [1, 2, 0.5]) {
@@ -1093,10 +1126,19 @@ const Player = {
     }
     return best;
   },
+  /* A song's beat grid can be trusted when its beats clearly stand out (and it was analysed
+   * with the current method). Slowed, ambient or loosely played songs fail this. */
+  beatReliable(t) {
+    if (!t?.bpm) return false;
+    if (t.demo) return true;
+    return (t.gridV || 0) >= GRID_V && (t.beatConf ?? 0) >= FIT_MIN;
+  },
   /* When and how to leave a song.
    * blend: tempos match → a long, beat-matched blend, a whole number of bars, starting on a bar line.
    * echo:  tempos too far apart → the old song echoes out on its last beat while the new one
-   *        drops in on its first beat, so two rhythms never play against each other. */
+   *        drops in on its first beat, so two rhythms never play against each other.
+   * fade:  one of the songs has no reliable beat → a smooth crossfade with a bass swap, no
+   *        stretching and no alignment (nothing to align to). */
   plan(from, toTrack) {
     const out = from.points?.mixOut || from.duration;
     const t = from.track, beat = t?.bpm ? 60 / t.bpm : 0, bar = beat * 4;
@@ -1105,13 +1147,16 @@ const Player = {
     if (match || !settings.smartMix) { // with Smart Mix off: a plain crossfade of the chosen length
       style = 'blend'; len = settings.crossfade;
       if (bar) len = Math.max(2, Math.round(len / bar)) * bar;
+    } else if (!this.beatReliable(t) || !this.beatReliable(toTrack)) {
+      style = 'fade';
+      len = Math.min(settings.crossfade, 8);
     } else {
       style = 'echo';
       len = beat ? clamp(beat * 2, 0.8, 1.6) : 1.2;
     }
     len = Math.min(len, out * 0.4);
     let start = out - len;
-    const step = style === 'blend' ? bar : beat;
+    const step = style === 'blend' ? bar : style === 'echo' ? beat : 0;
     if (step) { const off = t.beatOffset || 0; start = off + Math.floor((start - off) / step) * step; }
     return { start: Math.max(0, start), len, style };
   },
@@ -1138,8 +1183,8 @@ const Player = {
     const ctx = Engine.ensure(), now = ctx.currentTime + 0.05;
     let when = now, len, style;
     if (quick) {
-      style = this.tempoMatch(from, t) ? 'blend' : 'echo';
-      len = (style === 'blend' ? Math.min(settings.crossfade || 4, 4) : 1.2) * from.rate;
+      style = this.tempoMatch(from, t) ? 'blend' : (this.beatReliable(from.track) && this.beatReliable(t)) ? 'echo' : 'fade';
+      len = (style === 'echo' ? 1.2 : Math.min(settings.crossfade || 4, 4)) * from.rate;
     } else {
       const p = this.plan(from, t);
       len = p.len; style = p.style;
@@ -1192,7 +1237,7 @@ const Player = {
       if (st) to.playStretched(when, st);
       else { to.seek(start); to.setRate(match.rate); to.play(when); } // fallback: plain rate change
     } else { to.seek(start); to.play(when); }
-    if (smart && style === 'blend') {
+    if (smart && (style === 'blend' || style === 'fade')) {
       // bass swap halfway through, and the outgoing song is gently filtered as it leaves
       const mid = when + dur * 0.5;
       const lowIn = to.low.gain, lowOut = from.low.gain;
@@ -1863,7 +1908,7 @@ const Demo = {
       for (const def of this.defs) {
         const { blob, duration } = await this.render(def);
         const id = uid();
-        await uploadTrack({ id, fileName: id + '.wav', title: def.title, artist: def.artist, album: 'Demo Tracks', duration, bpm: def.bpm, beatOffset: 0.05, beatConf: 1, gridV: GRID_V, analyzed: true, demo: true, addedAt: Date.now() }, blob, null, `Uploading demo ${ids.length + 1} of 3`);
+        await uploadTrack({ id, fileName: id + '.wav', title: def.title, artist: def.artist, album: 'Demo Tracks', duration, bpm: def.bpm, beatOffset: 0.05, beatConf: 99, gridV: GRID_V, analyzed: true, demo: true, addedAt: Date.now() }, blob, null, `Uploading demo ${ids.length + 1} of 3`);
         ids.push(id);
       }
     } catch (e) { console.error(e); toast('Couldn’t generate the demo tracks'); return; }
