@@ -1,0 +1,19 @@
+{
+  "name": "مزج — Mashup",
+  "short_name": "مزج",
+  "description": "مشغّل موسيقى على هاتفك مع ميكسر بطرفين ومزج تلقائي بين الأغاني",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#121014",
+  "theme_color": "#121014",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

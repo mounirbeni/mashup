@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>مزج — Mashup</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="theme-color" content="#121014">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="مزج">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Readex+Pro:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<!--APP-->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z" fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="5.5" y="4" width="4.5" height="16" rx="1.2" fill="currentColor"/><rect x="14" y="4" width="4.5" height="16" rx="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M3 6.2v11.6a.8.8 0 0 0 1.2.7L13 13v4.8a.8.8 0 0 0 1.2.7l8.5-5.8a.8.8 0 0 0 0-1.4l-8.5-5.8a.8.8 0 0 0-1.2.7V11L4.2 5.5a.8.8 0 0 0-1.2.7z" fill="currentColor"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M21 6.2v11.6a.8.8 0 0 1-1.2.7L11 13v4.8a.8.8 0 0 1-1.2.7L1.3 12.7a.8.8 0 0 1 0-1.4l8.5-5.8a.8.8 0 0 1 1.2.7V11l8.8-5.5a.8.8 0 0 1 1.2.7z" fill="currentColor"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 4h4v4M4 20 20 4M20 16v4h-4M15 15l5 5M4 4l5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-library" viewBox="0 0 24 24"><path d="M4 4v16M8.5 4v16M13 4.8l5.6 15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M3 6h12M3 12h12M3 18h7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M18 9v8.5a2 2 0 1 1-2-2h2M18 9l3-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-mixer" viewBox="0 0 24 24"><path d="M6 3v6M6 15v6M12 3v2M12 11v10M18 3v10M18 19v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="3.5" y="9" width="5" height="6" rx="1.5" fill="currentColor"/><rect x="9.5" y="5" width="5" height="6" rx="1.5" fill="currentColor"/><rect x="15.5" y="13" width="5" height="6" rx="1.5" fill="currentColor"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.9" fill="currentColor"/><circle cx="12" cy="12" r="1.9" fill="currentColor"/><circle cx="19" cy="12" r="1.9" fill="currentColor"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-queue" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M17 15.5v5l4-2.5z" fill="currentColor"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h2M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-vol-lo" viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z" fill="currentColor"/></symbol>
+  <symbol id="i-vol-hi" viewBox="0 0 24 24"><path d="M3 9.5v5h3.5L11 18.5v-13L6.5 9.5z" fill="currentColor"/><path d="M14.5 9a4 4 0 0 1 0 6M17 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.6L4 15.5M4 20v-4.5h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M9 18V5.5l11-2V16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.5" fill="currentColor"/><circle cx="17.5" cy="16" r="2.5" fill="currentColor"/></symbol>
+</svg>
+
+<div class="app" id="app">
+  <main class="views" id="views">
+
+    <!-- ===== Library ===== -->
+    <section class="view" id="view-library" data-view="library">
+      <header class="view-head">
+        <h1 class="big-title">مكتبتي</h1>
+        <div class="head-actions">
+          <button class="icon-btn" id="btn-settings" aria-label="الإعدادات"><svg><use href="#i-gear"/></svg></button>
+          <button class="icon-btn accent" id="btn-add" aria-label="إضافة موسيقى"><svg><use href="#i-plus"/></svg></button>
+        </div>
+      </header>
+      <div class="segmented" role="tablist" id="lib-seg">
+        <button role="tab" data-seg="songs" aria-selected="true">الأغاني</button>
+        <button role="tab" data-seg="albums" aria-selected="false">الألبومات</button>
+        <button role="tab" data-seg="artists" aria-selected="false">الفنانون</button>
+      </div>
+      <div class="lib-tools" id="lib-tools">
+        <button class="pill-btn" id="btn-play-all"><svg><use href="#i-play"/></svg>تشغيل</button>
+        <button class="pill-btn" id="btn-shuffle-all"><svg><use href="#i-shuffle"/></svg>عشوائي</button>
+      </div>
+      <div id="lib-content"></div>
+      <div class="empty" id="lib-empty" hidden>
+        <div class="empty-art"><svg><use href="#i-note"/></svg></div>
+        <h2>مكتبتك فارغة</h2>
+        <p>أضف ملفات صوتية من هاتفك (MP3، M4A، WAV، FLAC…) لتبدأ. الملفات تبقى محفوظة على جهازك فقط.</p>
+        <button class="primary-btn" id="btn-add-empty"><svg><use href="#i-plus"/></svg>إضافة موسيقى</button>
+        <button class="ghost-btn" id="btn-demo">جرّب بمقاطع تجريبية للمزج</button>
+      </div>
+    </section>
+
+    <!-- ===== Playlists ===== -->
+    <section class="view" id="view-playlists" data-view="playlists" hidden>
+      <header class="view-head">
+        <h1 class="big-title">القوائم</h1>
+        <div class="head-actions">
+          <button class="icon-btn accent" id="btn-new-pl" aria-label="قائمة جديدة"><svg><use href="#i-plus"/></svg></button>
+        </div>
+      </header>
+      <div id="pl-content"></div>
+    </section>
+
+    <!-- ===== Playlist detail ===== -->
+    <section class="view" id="view-playlist" data-view="playlist" hidden>
+      <header class="sub-head">
+        <button class="back-btn" id="pl-back"><svg><use href="#i-back"/></svg>القوائم</button>
+        <button class="icon-btn" id="pl-more" aria-label="خيارات القائمة"><svg><use href="#i-more"/></svg></button>
+      </header>
+      <div class="pl-hero">
+        <div class="pl-cover" id="pl-cover"></div>
+        <h1 class="pl-name" id="pl-name"></h1>
+        <p class="pl-meta" id="pl-meta"></p>
+        <div class="lib-tools center">
+          <button class="pill-btn" id="pl-play"><svg><use href="#i-play"/></svg>تشغيل</button>
+          <button class="pill-btn" id="pl-mix"><svg><use href="#i-mixer"/></svg>مزج تلقائي</button>
+        </div>
+      </div>
+      <div id="pl-tracks"></div>
+      <button class="ghost-btn wide" id="pl-add-songs"><svg><use href="#i-plus"/></svg>إضافة أغانٍ</button>
+    </section>
+
+    <!-- ===== Mixer ===== -->
+    <section class="view" id="view-mixer" data-view="mixer" hidden>
+      <header class="view-head">
+        <h1 class="big-title">الميكسر</h1>
+        <div class="head-actions">
+          <button class="chip-toggle" id="mx-automix" aria-pressed="true"><svg><use href="#i-wave"/></svg>مزج تلقائي</button>
+        </div>
+      </header>
+      <div class="mixer" dir="ltr">
+        <div class="decks">
+          <div class="deck" id="deck-A" data-deck="A"></div>
+          <div class="deck" id="deck-B" data-deck="B"></div>
+        </div>
+        <div class="xfader-wrap">
+          <div class="xf-labels"><span>A</span><button class="mini-chip" id="xf-center">وسط</button><span>B</span></div>
+          <input type="range" class="xfader" id="xfader" min="0" max="1000" value="0" aria-label="الكروس فيدر">
+          <div class="xf-actions" dir="rtl">
+            <button class="action-chip" id="mx-mix-now"><svg><use href="#i-sync"/></svg>امزج الآن إلى الطرف الآخر</button>
+          </div>
+        </div>
+        <div class="master" dir="rtl">
+          <canvas id="mx-scope" height="56" aria-hidden="true"></canvas>
+          <p class="hint" id="mx-hint">حمّل أغنية على كل طرف من قائمة "⋯" أو اضغط على اسم الطرف. حرّك الكروس فيدر للمزج يدوياً، أو فعّل المزج التلقائي ليمزج الأغاني تلقائياً عند نهاية كل أغنية.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Search ===== -->
+    <section class="view" id="view-search" data-view="search" hidden>
+      <header class="view-head"><h1 class="big-title">بحث</h1></header>
+      <label class="search-box">
+        <svg><use href="#i-search"/></svg>
+        <input type="search" id="search-input" placeholder="أغانٍ، فنانون، ألبومات" autocomplete="off">
+      </label>
+      <div id="search-results"></div>
+    </section>
+  </main>
+
+  <!-- ===== Mini player ===== -->
+  <div class="mini" id="mini" hidden>
+    <button class="mini-main" id="mini-open" aria-label="فتح المشغّل">
+      <div class="art sm" id="mini-art"></div>
+      <div class="mini-text">
+        <span class="t1" id="mini-title"></span>
+        <span class="t2" id="mini-artist"></span>
+      </div>
+    </button>
+    <button class="icon-btn" id="mini-play" aria-label="تشغيل/إيقاف"><svg><use href="#i-play"/></svg></button>
+    <button class="icon-btn" id="mini-next" aria-label="التالي"><svg><use href="#i-next"/></svg></button>
+    <div class="mini-progress"><i id="mini-bar"></i></div>
+  </div>
+
+  <!-- ===== Tab bar ===== -->
+  <nav class="tabbar" id="tabbar">
+    <button data-tab="library" aria-current="page"><svg><use href="#i-library"/></svg><span>مكتبتي</span></button>
+    <button data-tab="playlists"><svg><use href="#i-list"/></svg><span>القوائم</span></button>
+    <button data-tab="mixer"><svg><use href="#i-mixer"/></svg><span>الميكسر</span></button>
+    <button data-tab="search"><svg><use href="#i-search"/></svg><span>بحث</span></button>
+  </nav>
+
+  <!-- ===== Now playing ===== -->
+  <div class="np" id="np" aria-hidden="true">
+    <div class="np-bg" id="np-bg"></div>
+    <div class="np-inner">
+      <button class="np-grab" id="np-close" aria-label="إغلاق"><span></span></button>
+      <div class="np-stage">
+        <div class="art xl" id="np-art"></div>
+        <canvas class="np-viz" id="np-viz" hidden></canvas>
+      </div>
+      <div class="np-info">
+        <div class="np-text">
+          <h2 id="np-title">—</h2>
+          <p id="np-artist"></p>
+        </div>
+        <button class="icon-btn round" id="np-more" aria-label="خيارات"><svg><use href="#i-more"/></svg></button>
+      </div>
+      <div class="np-progress" dir="ltr">
+        <input type="range" id="np-seek" min="0" max="1000" value="0" aria-label="موضع التشغيل">
+        <div class="np-times"><span id="np-cur">0:00</span><span class="np-mixbadge" id="np-mixbadge" hidden>يمزج…</span><span id="np-rem">-0:00</span></div>
+      </div>
+      <div class="np-controls" dir="ltr">
+        <button class="ctl" id="np-shuffle" aria-label="عشوائي" aria-pressed="false"><svg><use href="#i-shuffle"/></svg></button>
+        <button class="ctl big" id="np-prev" aria-label="السابق"><svg><use href="#i-prev"/></svg></button>
+        <button class="ctl huge" id="np-play" aria-label="تشغيل/إيقاف"><svg><use href="#i-play"/></svg></button>
+        <button class="ctl big" id="np-next" aria-label="التالي"><svg><use href="#i-next"/></svg></button>
+        <button class="ctl" id="np-repeat" aria-label="تكرار" aria-pressed="false"><svg><use href="#i-repeat"/></svg><b id="np-rep1" hidden>1</b></button>
+      </div>
+      <div class="np-volume" dir="ltr">
+        <svg><use href="#i-vol-lo"/></svg>
+        <input type="range" id="np-vol" min="0" max="100" value="100" aria-label="مستوى الصوت">
+        <svg><use href="#i-vol-hi"/></svg>
+      </div>
+      <div class="np-bottom">
+        <button class="np-tool" id="np-viz-btn" aria-pressed="false"><svg><use href="#i-wave"/></svg><span>مؤثر بصري</span></button>
+        <button class="np-tool" id="np-xf-btn"><svg><use href="#i-mixer"/></svg><span id="np-xf-label">مزج ٦ ث</span></button>
+        <button class="np-tool" id="np-queue-btn"><svg><use href="#i-queue"/></svg><span>التالي</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Sheets ===== -->
+  <div class="scrim" id="scrim" hidden></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" hidden>
+    <div class="sheet-grab"></div>
+    <div class="sheet-body" id="sheet-body"></div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <input type="file" id="file-input" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus" multiple hidden>
+</div>
+<!--/APP-->
+<script src="js/app.js"></script>
+</body>
+</html>
