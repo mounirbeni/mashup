@@ -73,7 +73,7 @@
       <div class="empty" id="lib-empty" hidden>
         <div class="empty-art"><svg><use href="#i-note"/></svg></div>
         <h2>Your library is empty</h2>
-        <p>Add audio files from your phone (MP3, M4A, WAV, FLAC…) to get started. Your files stay on this device only.</p>
+        <p>Add audio files (MP3, M4A, WAV, FLAC…) to get started. They’re saved to your private cloud library, so they play on any phone or computer where you sign in.</p>
         <button class="primary-btn" id="btn-add-empty"><svg><use href="#i-plus"/></svg>Add Music</button>
         <button class="ghost-btn" id="btn-demo">Try it with demo tracks</button>
       </div>
@@ -185,6 +185,19 @@
   <div class="sheet" id="sheet" role="dialog" aria-modal="true" hidden>
     <div class="sheet-grab"></div>
     <div class="sheet-body" id="sheet-body"></div>
+  </div>
+
+  <!-- ===== Sign in ===== -->
+  <div class="login" id="login" hidden>
+    <form class="login-card" id="login-form" autocomplete="on">
+      <img src="icons/icon.svg" alt="" width="72" height="72">
+      <h1>Mashup</h1>
+      <p>Enter your password to open your music library.</p>
+      <input type="text" name="username" value="mashup" autocomplete="username" hidden>
+      <input class="text-input" type="password" id="login-pw" name="password" placeholder="Password" autocomplete="current-password" required>
+      <p class="login-err" id="login-err" role="alert" hidden></p>
+      <button class="primary-btn" id="login-btn" type="submit">Sign In</button>
+    </form>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

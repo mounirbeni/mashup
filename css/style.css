@@ -297,3 +297,18 @@ input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bo
 .q-tog svg { width: 20px; height: 20px; }
 .q-tog[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
 .q-tog b { position: absolute; top: 4px; right: 6px; font-size: 9px; line-height: 12px; padding: 0 3px; border-radius: 5px; background: var(--accent-ink); color: var(--accent); }
+
+/* ---------- sign in ---------- */
+.login { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: var(--bg);
+  padding: calc(var(--safe-t) + 16px) var(--gutter-r) calc(var(--safe-b) + 16px) var(--gutter-l); }
+.login-card { width: min(360px, 100%); display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.login-card img { border-radius: 18px; box-shadow: var(--shadow); }
+.login-card h1 { font-family: var(--font-display); font-size: 28px; }
+.login-card p { margin: 0; color: var(--muted); }
+.login-card .primary-btn { width: 100%; justify-content: center; }
+.login-card .primary-btn:disabled { opacity: .6; }
+.login-err { color: #ff453a !important; font-size: 14px; }
+.local-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin-block: 12px 4px; border-radius: 14px; background: var(--surface-2); }
+.local-banner span { display: flex; flex-direction: column; min-width: 0; }
+.local-banner small { color: var(--muted); font-size: 13px; }
+.primary-btn.small { padding: 8px 14px; border-radius: 10px; font-size: 14px; flex: none; }

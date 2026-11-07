@@ -1,0 +1,9 @@
+{
+  "name": "mashup",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "dependencies": {
+    "@vercel/blob": "2.8.2"
+  }
+}

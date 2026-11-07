@@ -1,6 +1,6 @@
 // Offline support: cache the app shell; music itself lives in IndexedDB.
-const CACHE = 'mashup-v3';
-const SHELL = ['./', 'index.html', 'css/style.css', 'js/app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png'];
+const CACHE = 'mashup-v4';
+const SHELL = ['./', 'index.html', 'css/style.css', 'js/app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png', 'js/vendor/blob-upload.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -12,6 +12,8 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  // the API (library, uploads, song streaming) always goes to the network and is never cached
+  if (url.origin === location.origin && url.pathname.startsWith('/api/')) return;
   if (url.origin === location.origin) {
     // network first so updates arrive, cache as fallback for offline
     e.respondWith(fetch(req).then((res) => {

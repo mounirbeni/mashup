@@ -254,64 +254,65 @@ const Analysis = (() => {
 })();
 
 /* =========================================================================
- * Library state
+ * Cloud library — songs and playlists live in private cloud storage,
+ * so the same library opens on any phone or computer after signing in.
  * ========================================================================= */
+const Api = {
+  async call(path, opts = {}) {
+    const r = await fetch(path, { credentials: 'same-origin', ...opts, headers: { 'content-type': 'application/json', ...(opts.headers || {}) } });
+    if (r.status === 401) { Auth.show(); throw new Error('unauthorized'); }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    return j;
+  },
+  op(op, data = {}) { return this.call('/api/library', { method: 'POST', body: JSON.stringify({ op, ...data }) }); },
+  fileUrl(p) { return '/api/file?p=' + encodeURIComponent(p); },
+};
+
+const AUDIO_TYPES = { mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', flac: 'audio/flac', ogg: 'audio/ogg', opus: 'audio/ogg', aif: 'audio/aiff', aiff: 'audio/aiff' };
+const extOf = (name, type) => {
+  const m = /\.([a-z0-9]{2,5})$/i.exec(name || '');
+  if (m) return m[1].toLowerCase();
+  const hit = Object.entries(AUDIO_TYPES).find(([, t]) => t === type);
+  return hit ? hit[0] : 'mp3';
+};
+
+let uploader;
+async function uploadFile(pathname, body, contentType, onProgress) {
+  uploader = uploader || await import('/js/vendor/blob-upload.js');
+  return uploader.upload(pathname, body, {
+    access: 'private', handleUploadUrl: '/api/upload', contentType,
+    multipart: body.size > 8 * 1024 * 1024, onUploadProgress: onProgress,
+  });
+}
+
 const Lib = {
   tracks: new Map(),
   playlists: [],
-  artUrls: new Map(),
-  colors: new Map(),
   sorted() { return [...this.tracks.values()].sort((a, b) => collator.compare(a.title, b.title)); },
-  async load() {
-    const [ts, pls] = await Promise.all([DB.all('tracks'), DB.all('playlists')]);
-    ts.forEach((t) => this.tracks.set(t.id, t));
-    this.playlists = pls.sort((a, b) => a.createdAt - b.createdAt);
-  },
-  async artUrl(id) {
-    if (this.artUrls.has(id)) return this.artUrls.get(id);
-    const t = this.tracks.get(id);
-    let url = null;
-    if (t?.hasArt) { const b = await DB.get('art', id); if (b) url = URL.createObjectURL(b); }
-    this.artUrls.set(id, url);
-    return url;
-  },
-  async savePlaylist(pl) { await DB.put('playlists', pl); },
-};
-
-const analysisQueue = [];
-let analysing = false;
-async function runAnalysis() {
-  if (analysing) return;
-  analysing = true;
-  while (analysisQueue.length) {
-    const id = analysisQueue.shift();
-    const t = Lib.tracks.get(id);
-    if (!t || t.peaks) continue;
-    try {
-      const blob = await DB.get('audio', id);
-      const r = await Analysis.run(blob);
-      t.peaks = r.peaks;
-      if (!t.duration) t.duration = r.duration;
-      if (!t.bpm && r.bpm) t.bpm = r.bpm;
-      if (r.beatOffset != null) t.beatOffset = r.beatOffset;
-      await DB.put('tracks', t);
-      UI.trackUpdated(id);
-    } catch (e) {
-      console.warn('analysis failed', t.title, e);
-      t.peaks = new Uint8Array(0);
-      await DB.put('tracks', t).catch(() => {});
+  /* merge a library from the server, keeping existing track objects (the player holds references) */
+  apply(lib) {
+    const seen = new Set();
+    for (const t of lib.tracks || []) {
+      seen.add(t.id);
+      const cur = this.tracks.get(t.id);
+      if (cur) Object.assign(cur, t); else this.tracks.set(t.id, t);
     }
-    await new Promise((r) => setTimeout(r, 30));
-  }
-  analysing = false;
-}
-function queueAnalysis(ids) { analysisQueue.push(...ids); runAnalysis(); }
+    for (const id of [...this.tracks.keys()]) if (!seen.has(id)) this.tracks.delete(id);
+    this.playlists = (lib.playlists || []).sort((a, b) => a.createdAt - b.createdAt);
+  },
+  async load() { this.apply(await Api.call('/api/library')); },
+  async artUrl(id) { const t = this.tracks.get(id); return t?.art ? Api.fileUrl(t.art) : null; },
+  async savePlaylist(pl) { this.apply(await Api.op('savePlaylist', { playlist: pl })); },
+  async deletePlaylist(id) { this.apply(await Api.op('deletePlaylist', { id })); },
+  async updateTrack(id, patch) { this.apply(await Api.op('updateTrack', { id, patch })); },
+};
 
 function probeDuration(blob) {
   return new Promise((res) => {
     const a = document.createElement('audio');
     const url = URL.createObjectURL(blob);
-    const done = (v) => { URL.revokeObjectURL(url); res(v); };
+    let done = (v) => { done = () => {}; URL.revokeObjectURL(url); res(v); };
     a.preload = 'metadata';
     a.onloadedmetadata = () => done(isFinite(a.duration) ? a.duration : 0);
     a.onerror = () => done(-1);
@@ -320,14 +321,28 @@ function probeDuration(blob) {
   });
 }
 
+/* Upload one song (and its cover) to the cloud, then register it in the library. */
+async function uploadTrack(meta, audioBlob, artBlob, label) {
+  const ext = extOf(meta.fileName, audioBlob.type);
+  const type = audioBlob.type || AUDIO_TYPES[ext] || 'application/octet-stream';
+  const t = { ...meta, audio: `audio/${meta.id}.${ext}`, art: null, size: audioBlob.size };
+  delete t.fileName;
+  await uploadFile(t.audio, audioBlob, type, (p) => toast(`${label} · ${Math.round(p.percentage)}%`, 0));
+  if (artBlob) {
+    const aext = /png/.test(artBlob.type) ? 'png' : 'jpg';
+    try { t.art = `art/${meta.id}.${aext}`; await uploadFile(t.art, artBlob, artBlob.type || 'image/jpeg'); } catch { t.art = null; }
+  }
+  Lib.apply(await Api.op('addTrack', { track: t }));
+}
+
 async function addFiles(files) {
   files = [...files].filter((f) => f.type.startsWith('audio/') || /\.(mp3|m4a|aac|wav|flac|ogg|opus|alac|aiff?)$/i.test(f.name));
   if (!files.length) { toast('No audio files found'); return; }
-  const added = [];
-  let i = 0, failed = 0;
+  let i = 0, ok = 0, failed = 0;
   for (const f of files) {
     i++;
-    toast(`Adding ${i} of ${files.length}…`, 0);
+    const label = `Uploading ${i} of ${files.length}`;
+    toast(label + '…', 0);
     const dur = await probeDuration(f);
     if (dur < 0) { failed++; continue; }
     const tags = await Tags.read(f);
@@ -337,41 +352,97 @@ async function addFiles(files) {
       const m = name.match(/^(.+?)\s+[-–—]\s+(.+)$/);
       if (m) { artist = artist || m[1].trim(); title = m[2].trim(); } else title = name;
     }
-    const t = {
-      id: uid(), title, artist: artist || 'Unknown Artist', album: tags.album || '',
-      duration: dur, bpm: tags.bpm || null, beatOffset: null, peaks: null,
-      hasArt: !!tags.art, addedAt: Date.now(), size: f.size,
-    };
+    // tempo analysis runs on this device once, before upload, so AutoMix can beat-match anywhere
+    let a = null;
+    try { toast(`Analyzing ${i} of ${files.length}…`, 0); a = await Analysis.run(f); } catch (e) { console.warn('analysis failed', e); }
     try {
-      await DB.put('audio', f, t.id);
-      if (tags.art) await DB.put('art', tags.art, t.id);
-      await DB.put('tracks', t);
-      Lib.tracks.set(t.id, t);
-      added.push(t.id);
+      await uploadTrack({
+        id: uid(), fileName: f.name, title, artist: artist || 'Unknown Artist', album: tags.album || '',
+        duration: dur || a?.duration || 0, bpm: tags.bpm || a?.bpm || null, beatOffset: a?.beatOffset ?? null,
+        analyzed: !!a, addedAt: Date.now(),
+      }, f, tags.art, label);
+      ok++;
+      UI.render();
     } catch (e) {
       console.error(e); failed++;
-      if (e && e.name === 'QuotaExceededError') { toast('Storage is full for this site'); break; }
+      if (/unauthorized/.test(e.message)) break;
     }
   }
   UI.render();
-  toast(added.length ? `Added ${songsLabel(added.length)}${failed ? ` · ${failed} failed` : ''}` : 'Couldn’t add these files');
-  queueAnalysis(added);
+  toast(ok ? `Added ${songsLabel(ok)} to your cloud library${failed ? ` · ${failed} failed` : ''}` : 'Couldn’t upload these files');
 }
 
 async function deleteTrack(id) {
-  if (Engine.decks.A.track?.id === id || Engine.decks.B.track?.id === id) {
-    for (const d of Object.values(Engine.decks)) if (d.track?.id === id) d.unload();
-  }
-  await Promise.all([DB.del('tracks', id), DB.del('audio', id), DB.del('art', id)]);
-  Lib.tracks.delete(id);
-  const u = Lib.artUrls.get(id); if (u) URL.revokeObjectURL(u);
-  Lib.artUrls.delete(id);
-  for (const pl of Lib.playlists) {
-    if (pl.trackIds.includes(id)) { pl.trackIds = pl.trackIds.filter((x) => x !== id); await Lib.savePlaylist(pl); }
-  }
+  for (const d of Object.values(Engine.decks)) if (d.track?.id === id) d.unload();
+  Lib.apply(await Api.op('deleteTrack', { id }));
   Player.removeFromQueue(id);
   UI.render();
 }
+
+/* Songs added before the cloud library existed were kept in this browser only. */
+const Local = {
+  count: 0,
+  async check() {
+    try { this.count = (await DB.all('tracks')).length; } catch { this.count = 0; }
+    return this.count;
+  },
+  async migrate() {
+    let tracks, playlists;
+    try { [tracks, playlists] = await Promise.all([DB.all('tracks'), DB.all('playlists')]); } catch { toast('Couldn’t read the songs saved on this device'); return; }
+    let i = 0, ok = 0;
+    for (const t of tracks) {
+      i++;
+      if (Lib.tracks.has(t.id)) { await Promise.all([DB.del('tracks', t.id), DB.del('audio', t.id), DB.del('art', t.id)]); ok++; continue; }
+      try {
+        const [audio, art] = await Promise.all([DB.get('audio', t.id), DB.get('art', t.id)]);
+        if (!audio) continue;
+        await uploadTrack({
+          id: t.id, fileName: audio.name || '', title: t.title, artist: t.artist, album: t.album,
+          duration: t.duration, bpm: t.bpm, beatOffset: t.beatOffset, analyzed: !!t.peaks, fav: !!t.fav, demo: !!t.demo, addedAt: t.addedAt,
+        }, audio, art, `Moving ${i} of ${tracks.length} to the cloud`);
+        await Promise.all([DB.del('tracks', t.id), DB.del('audio', t.id), DB.del('art', t.id)]);
+        ok++; UI.render();
+      } catch (e) { console.error(e); if (/unauthorized/.test(e.message)) return; }
+    }
+    for (const p of playlists) {
+      try { await Lib.savePlaylist(p); await DB.del('playlists', p.id); } catch (e) { console.error(e); }
+    }
+    await this.check();
+    UI.render();
+    toast(this.count ? `Moved ${songsLabel(ok)}. ${songsLabel(this.count)} couldn’t be moved.` : `Moved ${songsLabel(ok)} to your cloud library`);
+  },
+};
+
+/* Sign-in screen */
+const Auth = {
+  show() { $('#login').hidden = false; setTimeout(() => $('#login-pw').focus(), 50); },
+  hide() { $('#login').hidden = true; },
+  async status() {
+    try { const r = await fetch('/api/login', { credentials: 'same-origin' }); return r.ok ? r.json() : { authed: false, offline: true }; }
+    catch { return { authed: false, offline: true }; }
+  },
+  bind(onIn) {
+    $('#login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = $('#login-err'), btn = $('#login-btn');
+      err.hidden = true; btn.disabled = true;
+      try {
+        const r = await fetch('/api/login', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: $('#login-pw').value }) });
+        if (!r.ok) {
+          err.textContent = r.status === 401 ? 'That password isn’t right. Try again.' : 'The library isn’t set up yet. Add APP_PASSWORD in Vercel.';
+          err.hidden = false; return;
+        }
+        $('#login-pw').value = '';
+        this.hide(); onIn();
+      } catch { err.textContent = 'Couldn’t reach the server. Check your connection.'; err.hidden = false; }
+      finally { btn.disabled = false; }
+    });
+  },
+  async signOut() {
+    await fetch('/api/login', { method: 'DELETE', credentials: 'same-origin' }).catch(() => {});
+    location.reload();
+  },
+};
 
 /* =========================================================================
  * Audio engine — two decks, 3-band EQ + filter each, equal-power crossfader
@@ -410,26 +481,25 @@ class Deck {
   get duration() { return isFinite(this.audio.duration) ? this.audio.duration : (this.track?.duration || 0); }
   get bpmNow() { return this.track?.bpm ? this.track.bpm * this.rate : null; }
   async load(track) {
-    const blob = await DB.get('audio', track.id);
-    if (!blob) throw new Error('missing audio');
     this.audio.pause();
-    if (this.url) URL.revokeObjectURL(this.url);
-    this.url = URL.createObjectURL(blob);
     this.track = track;
+    this.preloadedFor = null;
     this.cue = track.beatOffset || 0;
     this.setRate(1);
-    this.audio.src = this.url;
-    await new Promise((res) => {
-      const ok = () => { this.audio.removeEventListener('loadedmetadata', ok); this.audio.removeEventListener('error', ok); res(); };
-      this.audio.addEventListener('loadedmetadata', ok); this.audio.addEventListener('error', ok);
-      setTimeout(ok, 6000);
+    this.audio.src = Api.fileUrl(track.audio);
+    await new Promise((res, rej) => {
+      const done = (e) => {
+        this.audio.removeEventListener('loadedmetadata', done); this.audio.removeEventListener('error', done); clearTimeout(timer);
+        e && e.type === 'error' ? rej(new Error('couldn’t load audio')) : res();
+      };
+      const timer = setTimeout(done, 20000);
+      this.audio.addEventListener('loadedmetadata', done); this.audio.addEventListener('error', done);
     });
     UI.deckLoaded(this);
   }
   unload() {
     this.audio.pause(); this.audio.removeAttribute('src'); this.audio.load();
-    if (this.url) URL.revokeObjectURL(this.url);
-    this.url = null; this.track = null; UI.deckLoaded(this);
+    this.track = null; this.preloadedFor = null; UI.deckLoaded(this);
   }
   play() { const p = this.audio.play(); if (p && p.catch) p.catch((e) => { console.warn(e); UI.deckState(); }); }
   pause() { this.audio.pause(); }
@@ -631,7 +701,8 @@ const Player = {
     if (!t || this.mixing) return;
     const from = this.live, to = targetDeck || Engine.other(from);
     this.mixing = { from, to, i };
-    try { if (to.track?.id !== id || !targetDeck) await to.load(t); } catch { this.mixing = null; toast('Couldn’t load the next song'); return; }
+    try { if (to.preloadedFor !== id || to.track?.id !== id) await to.load(t); } catch { this.mixing = null; toast('Couldn’t load the next song'); return; }
+    to.preloadedFor = null;
     if (!this.mixing) return; // aborted while loading
     this.qi = i;
     this.startMix(from, to, dur);
@@ -646,7 +717,7 @@ const Player = {
       if (Math.abs(ratio - 1) <= 0.1) to.setRate(ratio);
     }
     if (!to.playing) {
-      let start = to.time > 0.5 && to.time < to.duration - dur - 2 ? to.time : (to.track?.beatOffset || 0);
+      let start = to.track?.beatOffset || 0;
       if (smart && from.playing) {
         const per = 60 / to.track.bpm, phOut = from.phase();
         const base = Math.floor((start - (to.track.beatOffset || 0)) / per);
@@ -698,6 +769,14 @@ const Player = {
     if (!settings.autoMix || this.mixing || !d.playing || this.repeat === 'one' || settings.crossfade <= 0) return;
     const dur = d.duration, left = (dur - d.time) / (d.rate || 1);
     if (!dur || dur < settings.crossfade * 2.5) return;
+    // start buffering the next song ~25 s early so the blend starts on time
+    if (left <= settings.crossfade + 25 && this.hasNext()) {
+      const nid = this.queue[this.nextIndex()], other = Engine.other(d);
+      if (other.preloadedFor !== nid && !other.loading && Lib.tracks.has(nid)) {
+        other.loading = true;
+        other.load(Lib.tracks.get(nid)).then(() => { other.preloadedFor = nid; other.seek(other.track.beatOffset || 0); }).catch(() => {}).finally(() => { other.loading = false; });
+      }
+    }
     if (left <= settings.crossfade + 0.1 && this.hasNext()) {
       const ni = this.nextIndex();
       if (Lib.tracks.has(this.queue[ni])) this.mixTo(ni, Math.max(1, left - 0.15));
@@ -755,6 +834,8 @@ const UI = {
     $('#lib-empty').hidden = !empty;
     $('#lib-seg').hidden = empty; $('#lib-tools').hidden = empty;
     const c = $('#lib-content');
+    const banner = Local.count ? `<div class="local-banner"><span><strong>${songsLabel(Local.count)} saved only on this device</strong><small>Upload them so they play on all your devices.</small></span><button class="primary-btn small" data-act="migrate">Upload</button></div>` : '';
+    if (empty && Local.count) { $('#lib-empty').hidden = true; c.innerHTML = banner; return; }
     if (empty) { c.innerHTML = ''; return; }
     let tracks = all, head = '';
     if (this.filter) {
@@ -764,16 +845,16 @@ const UI = {
     $('#lib-tools').hidden = !(this.seg === 'songs' || this.filter);
     if (this.seg === 'songs' || this.filter) {
       this.currentListIds = tracks.map((t) => t.id);
-      c.innerHTML = head + this.listFor(tracks, 'lib') + `<p class="count-note">${songsLabel(tracks.length)}</p>`;
+      c.innerHTML = (this.filter ? '' : banner) + head + this.listFor(tracks, 'lib') + `<p class="count-note">${songsLabel(tracks.length)}</p>`;
     } else {
       const key = this.seg === 'albums' ? (t) => t.album || 'Unknown Album' : (t) => t.artist;
       const groups = new Map();
       for (const t of all) { const k = key(t); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(t); }
       const names = [...groups.keys()].sort(collator.compare);
       if (this.seg === 'albums') {
-        c.innerHTML = `<div class="grid">${names.map((n) => { const ts = groups.get(n); return `<button class="tile" data-act="filter" data-type="album" data-value="${esc(n)}">${this.artHTML(ts.find((x) => x.hasArt) || ts[0], '')}<span class="t1">${esc(n)}</span><span class="t2">${esc(ts[0].artist)}</span></button>`; }).join('')}</div>`;
+        c.innerHTML = `<div class="grid">${names.map((n) => { const ts = groups.get(n); return `<button class="tile" data-act="filter" data-type="album" data-value="${esc(n)}">${this.artHTML(ts.find((x) => x.art) || ts[0], '')}<span class="t1">${esc(n)}</span><span class="t2">${esc(ts[0].artist)}</span></button>`; }).join('')}</div>`;
       } else {
-        c.innerHTML = `<div class="rows">${names.map((n) => { const ts = groups.get(n); return `<div class="row"><button class="row-main" data-act="filter" data-type="artist" data-value="${esc(n)}">${this.artHTML(ts.find((x) => x.hasArt) || ts[0])}<span class="row-text"><span class="t1">${esc(n)}</span><span class="t2">${songsLabel(ts.length)}</span></span></button><span class="row-meta chev">${icon('back')}</span></div>`; }).join('')}</div>`;
+        c.innerHTML = `<div class="rows">${names.map((n) => { const ts = groups.get(n); return `<div class="row"><button class="row-main" data-act="filter" data-type="artist" data-value="${esc(n)}">${this.artHTML(ts.find((x) => x.art) || ts[0])}<span class="row-text"><span class="t1">${esc(n)}</span><span class="t2">${songsLabel(ts.length)}</span></span></button><span class="row-meta chev">${icon('back')}</span></div>`; }).join('')}</div>`;
       }
     }
     this.hydrateArt(c);
@@ -1022,7 +1103,7 @@ const UI = {
         }
         if (m === 'del') {
           if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.lastChild.textContent = 'Tap again to confirm'; return; }
-          Lib.playlists = Lib.playlists.filter((p) => p.id !== pl.id); await DB.del('playlists', pl.id);
+          await Lib.deletePlaylist(pl.id);
           this.closeSheet(); this.plId = null; this.showView('playlists'); this.renderPlaylists();
         }
       });
@@ -1066,7 +1147,9 @@ const UI = {
       ${compact ? '' : `<div class="setting"><div class="menu">
         <button data-s="add">${icon('plus')}Add Music from Device</button>
         <button data-s="demo">${icon('wave')}Add Demo Tracks for Mixing</button>
+        ${Local.count ? `<button data-s="migrate">${icon('plus')}Upload ${songsLabel(Local.count)} saved on this device</button>` : ''}
         <button data-s="theme">${icon('gear')}Appearance: <span id="s-theme-name"></span></button>
+        <button data-s="signout">${icon('back')}Sign Out</button>
         <button data-s="wipe" class="danger">${icon('trash')}Delete Entire Library</button></div>
         <small id="s-usage"></small></div>`}`, (b) => {
       const xf = $('#s-xf', b);
@@ -1079,12 +1162,15 @@ const UI = {
       if (compact) return;
       const themes = { auto: 'Automatic', dark: 'Dark', light: 'Light' };
       $('#s-theme-name', b).textContent = themes[store.get('theme', 'auto')];
-      if (navigator.storage?.estimate) navigator.storage.estimate().then((e) => { $('#s-usage', b).textContent = `Using ${(e.usage / 1048576).toFixed(0)} MB of ${(e.quota / 1048576 / 1024).toFixed(1)} GB available. Your music is stored on this device only.`; });
+      const mb = [...Lib.tracks.values()].reduce((n, t) => n + (t.size || 0), 0) / 1048576;
+      $('#s-usage', b).textContent = `${songsLabel(Lib.tracks.size)} · ${mb.toFixed(0)} MB in your private cloud library. Sign in with the same password on any device to play them.`;
       b.querySelector('.menu').addEventListener('click', async (e) => {
         const btn = e.target.closest('[data-s]'); if (!btn) return;
         const s = btn.dataset.s;
         if (s === 'add') { this.closeSheet(); $('#file-input').click(); }
         if (s === 'demo') { this.closeSheet(); Demo.add(); }
+        if (s === 'migrate') { this.closeSheet(); Local.migrate(); }
+        if (s === 'signout') { Auth.signOut(); }
         if (s === 'theme') {
           const order = ['auto', 'dark', 'light']; const cur = store.get('theme', 'auto');
           const nx = order[(order.indexOf(cur) + 1) % 3]; store.set('theme', nx); applyTheme(); $('#s-theme-name', b).textContent = themes[nx];
@@ -1092,8 +1178,8 @@ const UI = {
         if (s === 'wipe') {
           if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.lastChild.textContent = 'Tap again to delete every song'; return; }
           Engine.decks.A.unload(); Engine.decks.B.unload();
-          await Promise.all(['tracks', 'audio', 'art', 'playlists'].map((s2) => DB.clear(s2)));
-          Lib.tracks.clear(); Lib.playlists = []; Player.queue = []; Player.original = []; Player.qi = -1;
+          toast('Deleting your library…', 0);
+          Lib.apply(await Api.op('wipe')); Player.queue = []; Player.original = []; Player.qi = -1;
           this.closeSheet(); this.render(); this.nowPlaying(); toast('Library deleted');
         }
       });
@@ -1103,9 +1189,9 @@ const UI = {
 
 async function toggleFav(id) {
   const t = Lib.tracks.get(id); if (!t) return;
-  t.fav = !t.fav;
-  await DB.put('tracks', t);
-  UI.transport();
+  const fav = !t.fav;
+  t.fav = fav; UI.transport();
+  try { await Lib.updateTrack(id, { fav }); } catch { t.fav = !fav; UI.transport(); toast('Couldn’t save. Check your connection.'); return; }
   if (UI.tab === 'playlists') UI.plId ? UI.renderPlaylist() : UI.renderPlaylists();
   toast(t.fav ? 'Added to Favorites' : 'Removed from Favorites', 1400);
 }
@@ -1217,13 +1303,12 @@ const Demo = {
     try {
       for (const def of this.defs) {
         const { blob, duration } = await this.render(def);
-        const t = { id: uid(), title: def.title, artist: def.artist, album: 'Demo Tracks', duration, bpm: def.bpm, beatOffset: 0.05, peaks: null, hasArt: false, addedAt: Date.now(), size: blob.size, demo: true };
-        await DB.put('audio', blob, t.id); await DB.put('tracks', t);
-        Lib.tracks.set(t.id, t); ids.push(t.id);
+        const id = uid();
+        await uploadTrack({ id, fileName: id + '.wav', title: def.title, artist: def.artist, album: 'Demo Tracks', duration, bpm: def.bpm, beatOffset: 0.05, analyzed: true, demo: true, addedAt: Date.now() }, blob, null, `Uploading demo ${ids.length + 1} of 3`);
+        ids.push(id);
       }
     } catch (e) { console.error(e); toast('Couldn’t generate the demo tracks'); return; }
     UI.render(); toast('Added 3 demo tracks. Play one to hear AutoMix.');
-    queueAnalysis(ids);
   },
 };
 function wav(buf) {
@@ -1321,6 +1406,7 @@ function bind() {
     if (act === 'clear-filter') { UI.filter = null; UI.renderLibrary(); }
     if (act === 'open-pl') UI.openPlaylist(a.dataset.pl);
     if (act === 'new-pl') UI.newPlaylist();
+    if (act === 'migrate') Local.migrate();
   });
   $('#btn-new-pl').onclick = () => UI.newPlaylist();
   $('#pl-back').onclick = () => { UI.plId = null; UI.showView('playlists'); UI.renderPlaylists(); };
@@ -1400,18 +1486,29 @@ async function boot() {
   applyTheme();
   bind();
   MediaSessionCtl.init();
-  try { await Lib.load(); } catch (e) { console.error(e); toast('Couldn’t open the library on this device. Private browsing may be on.'); }
-  UI.render();
   const tab = store.get('tab', 'library');
   UI.setTab(['library', 'playlists', 'search'].includes(tab) ? tab : 'library');
   UI.transport();
-  queueAnalysis([...Lib.tracks.values()].filter((t) => !t.peaks).map((t) => t.id));
   requestAnimationFrame(frame);
   if ('serviceWorker' in navigator && /^https:|^http:\/\/localhost/.test(location.href) && !window.__NO_SW__) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
-  window.__mazj = { Engine, Player, Lib, UI, settings }; // for debugging
+  window.__mazj = { Engine, Player, Lib, UI, settings, Local }; // for debugging
+  const open = async () => {
+    toast('Loading your library…', 0);
+    try { await Lib.load(); $('#toast').hidden = true; }
+    catch (e) { if (!/unauthorized/.test(e.message)) toast('Couldn’t load your library. Check your connection.'); return; }
+    await Local.check();
+    UI.render();
+    if (Local.count) toast(`${songsLabel(Local.count)} on this device can be uploaded to your cloud library`, 3500);
+  };
+  Auth.bind(open);
+  const st = await Auth.status();
+  if (st.authed) open();
+  else if (st.offline) toast('Couldn’t reach the server. Check your connection.', 0);
+  else Auth.show();
+  // pick up changes made on other devices when coming back to the app
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#login').hidden) Lib.load().then(() => UI.render()).catch(() => {}); });
 }
 boot();
 })();

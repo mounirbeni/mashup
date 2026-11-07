@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["cdg1"],
+  "functions": {
+    "api/file.js": { "maxDuration": 300 }
+  },
+  "headers": [
+    { "source": "/sw.js", "headers": [{ "key": "cache-control", "value": "no-cache" }] }
+  ]
+}
