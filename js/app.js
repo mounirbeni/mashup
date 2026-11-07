@@ -502,7 +502,7 @@ class Deck {
   get playing() { return this._playing; }
   get time() {
     if (!this._playing || !this.ctx) return this.offset;
-    return Math.min(this.duration, this.offset + (this.ctx.currentTime - this.t0) * this.rate);
+    return Math.min(this.duration, this.offset + Math.max(0, this.ctx.currentTime - this.t0) * this.rate);
   }
   get duration() { return this.buffer ? this.buffer.duration : (this.track?.duration || 0); }
   get bpmNow() { return this.track?.bpm ? this.track.bpm * this.rate : null; }
@@ -516,6 +516,7 @@ class Deck {
     const buf = await Buffers.get(track);
     if (token !== this.loadToken) throw new Error('superseded');
     this.buffer = buf;
+    this.points = buf._points || (buf._points = mixPoints(buf));
     Buffers.trim();
     UI.deckLoaded(this);
     analyzeIfNeeded(track, buf);
@@ -525,7 +526,7 @@ class Deck {
     this.track = null; this.buffer = null; this.offset = 0; this.preloadedFor = null;
     UI.deckLoaded(this); UI.deckState();
   }
-  play() {
+  play(when) {
     if (!this.buffer || this._playing || !this.ctx) return;
     if (this.offset >= this.duration - 0.05) this.offset = 0;
     const n = this.ctx.createBufferSource();
@@ -537,7 +538,7 @@ class Deck {
       this.node = null; this._playing = false; this.offset = this.duration;
       UI.deckState(); Player.onDeckEnded(this);
     };
-    this.t0 = this.ctx.currentTime;
+    this.t0 = Math.max(this.ctx.currentTime, when || 0);
     n.start(this.t0, this.offset);
     this.node = n; this._playing = true;
     UI.deckState();
@@ -598,6 +599,21 @@ class Deck {
     const x = (at - (this.track.beatOffset || 0)) / per;
     return x - Math.floor(x);
   }
+}
+
+/* Loudness map of a song: where the sound really starts (after silence or a near-silent intro)
+ * and where the fade-out begins, so blends skip silence and finish before the song dies away. */
+function mixPoints(buf) {
+  const ch = buf.getChannelData(0), sr = buf.sampleRate, win = Math.floor(sr * 0.1), n = Math.floor(ch.length / win);
+  if (n < 50) return { mixIn: 0, mixOut: buf.duration };
+  const env = new Float32Array(n);
+  for (let i = 0; i < n; i++) { let s = 0; const o = i * win; for (let j = 0; j < win; j += 16) { const v = ch[o + j]; s += v * v; } env[i] = Math.sqrt(s / (win / 16)); }
+  const sm = new Float32Array(n); // ~1 s moving average so single hits don't count
+  for (let i = 0; i < n; i++) { let s = 0, c = 0; for (let k = Math.max(0, i - 5); k <= Math.min(n - 1, i + 5); k++) { s += env[k]; c++; } sm[i] = s / c; }
+  const med = Array.from(sm).sort((a, b) => a - b)[Math.floor(n / 2)] || 0;
+  let a = 0; while (a < n && sm[a] < med * 0.3) a++;
+  let b = n - 1; while (b > a && sm[b] < med * 0.8) b--;
+  return { mixIn: Math.min(a * 0.1, buf.duration * 0.25), mixOut: Math.max((b + 1) * 0.1, buf.duration * 0.6) };
 }
 
 /* Songs added without tempo info get analysed the first time they're played. */
@@ -677,10 +693,10 @@ const Engine = {
     return this.anim.from + (this.anim.to - this.anim.from) * k;
   },
   /* schedule an equal-power crossfade in the audio thread (keeps working in the background) */
-  fadeTo(to, dur, onDone) {
+  fadeTo(to, dur, onDone, when) {
     const ctx = this.ensure();
     if (this.anim) { clearTimeout(this.anim.timer); this.anim = null; }
-    const from = this.x, now = ctx.currentTime + 0.02, steps = 24;
+    const from = this.x, now = Math.max(ctx.currentTime + 0.02, when || 0), steps = 24;
     for (const [d, idx] of [[this.decks.A, 0], [this.decks.B, 1]]) {
       const p = d.xf.gain;
       p.cancelScheduledValues(0);
@@ -690,7 +706,7 @@ const Engine = {
         p.linearRampToValueAtTime(this.gains(xi)[idx], now + dur * (i / steps));
       }
     }
-    this.anim = { from, to, t0: now, dur, timer: setTimeout(() => { this.anim = null; this.x = to; onDone && onDone(); }, dur * 1000 + 60) };
+    this.anim = { from, to, t0: now, dur, timer: setTimeout(() => { this.anim = null; this.x = to; onDone && onDone(); }, (now - ctx.currentTime + dur) * 1000 + 60) };
   },
   setVolume(v) { settings.volume = v; saveSettings(); if (this.ctx) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02); },
   other(d) { return d === this.decks.A ? this.decks.B : this.decks.A; },
@@ -719,7 +735,7 @@ const Player = {
     if (!t) return;
     Engine.ensure();
     const canMix = mix && settings.crossfade > 0 && this.live.playing && this.live.track;
-    if (canMix) return this.mixTo(i, Math.min(settings.crossfade, 4));
+    if (canMix) return this.mixTo(i, { quick: true });
     this.cancelMix();
     const deck = this.live, other = Engine.other(deck);
     other.pause();
@@ -800,65 +816,101 @@ const Player = {
   cycleRepeat() { this.repeat = { off: 'all', all: 'one', one: 'off' }[this.repeat]; UI.transport(); },
 
   /* ---- mixing ---- */
-  async mixTo(i, dur, { targetDeck } = {}) {
+  /* the song AutoMix should blend into: the same song again when repeating one */
+  upcomingIndex() {
+    if (this.repeat === 'one') return this.qi;
+    return this.hasNext() ? this.nextIndex() : -1;
+  },
+  /* When to start blending out of a deck: the blend is a whole number of bars long,
+   * starts on a bar line, and finishes before the song's fade-out. */
+  plan(from) {
+    const out = from.points?.mixOut || from.duration;
+    const t = from.track, bar = t?.bpm ? 240 / t.bpm : 0;
+    let len = settings.crossfade;
+    if (bar) len = Math.max(2, Math.round(len / bar)) * bar;
+    len = Math.min(len, out * 0.4);
+    let start = out - len;
+    if (bar) { const off = t.beatOffset || 0; start = off + Math.floor((start - off) / bar) * bar; }
+    return { start: Math.max(0, start), len };
+  },
+  /* Where the incoming song enters: after its silence or quiet intro, on a bar line. */
+  entryPoint(d) {
+    const t = d.track, mi = d.points?.mixIn || 0;
+    if (!t?.bpm) return mi;
+    const bar = 240 / t.bpm, off = t.beatOffset || 0;
+    let x = off + Math.ceil((mi - off - 0.05) / bar) * bar;
+    while (x < 0) x += bar;
+    return x;
+  },
+  async mixTo(i, { quick = false } = {}) {
     const id = this.queue[i];
     const t = Lib.tracks.get(id);
     if (!t || this.mixing) return;
-    const from = this.live, to = targetDeck || Engine.other(from);
+    const from = this.live, to = Engine.other(from);
     this.mixing = { from, to, i };
-    try { if (to.preloadedFor !== id || to.track?.id !== id) await to.load(t); } catch { this.mixing = null; toast('Couldn’t load the next song'); return; }
+    try { if (to.preloadedFor !== id || to.track?.id !== id) await to.load(t); }
+    catch (e) { this.mixing = null; if (e.message !== 'superseded') toast('Couldn’t load the next song'); return; }
     to.preloadedFor = null;
-    if (!this.mixing) return; // aborted while loading
+    if (!this.mixing) return; // cancelled while loading
     this.qi = i;
-    this.startMix(from, to, dur);
+    const ctx = Engine.ensure(), now = ctx.currentTime + 0.05;
+    let when = now, len;
+    if (quick) len = Math.min(settings.crossfade || 4, 4) * from.rate;
+    else {
+      const p = this.plan(from);
+      len = p.len;
+      if (from.time < p.start) when = now + (p.start - from.time) / from.rate;
+      else len = Math.max(1, Math.min(len, from.duration - from.time - 0.1));
+    }
+    this.startMix(from, to, len / from.rate, when);
   },
-  /* mix whatever is loaded on deck `to` in, over `dur` seconds */
-  startMix(from, to, dur) {
-    Engine.ensure();
+  /* blend deck `to` in over `dur` seconds, starting at audio-clock time `when` */
+  startMix(from, to, dur, when) {
+    const ctx = Engine.ensure();
+    when = Math.max(when || 0, ctx.currentTime + 0.02);
     this.mixing = this.mixing || { from, to, i: this.qi };
-    const smart = settings.smartMix && from.track?.bpm && to.track?.bpm;
-    if (smart) {
-      const ratio = (from.track.bpm * from.rate) / to.track.bpm;
-      if (Math.abs(ratio - 1) <= 0.06) to.setRate(ratio);
+    const smart = settings.smartMix;
+    const sync = smart && from.track?.bpm && to.track?.bpm;
+    let ratio = 1;
+    if (sync) { const r = (from.track.bpm * from.rate) / to.track.bpm; if (Math.abs(r - 1) <= 0.06) ratio = r; }
+    to.pause();
+    to.setRate(ratio);
+    let start = this.entryPoint(to);
+    if (sync && from.playing) {
+      // land the incoming beat exactly on the outgoing beat
+      const at = from.time + (when - ctx.currentTime) * from.rate;
+      start += (from.phase(at) || 0) * 60 / to.track.bpm;
     }
-    if (!to.playing) {
-      let start = to.track?.beatOffset || 0;
-      if (smart && from.playing) {
-        const per = 60 / to.track.bpm, phOut = from.phase();
-        const base = Math.floor((start - (to.track.beatOffset || 0)) / per);
-        start = (to.track.beatOffset || 0) + (base + phOut) * per + 0.04 * to.rate;
-      }
-      to.seek(Math.max(0, start));
-      to.play();
-    }
+    to.seek(Math.min(start, Math.max(0, to.duration - dur * to.rate - 1)));
+    to.play(when);
     if (smart) {
-      // nudge phase once playback has settled
-      setTimeout(() => {
-        if (!this.mixing || !from.playing || !to.playing) return;
-        let diff = to.phase() - from.phase();
-        diff -= Math.round(diff);
-        if (Math.abs(diff) > 0.025) to.seek(to.time - diff * 60 / to.track.bpm);
-      }, 450);
-      // bass swap: incoming low cut until the midpoint, then swap
-      const ctx = Engine.ctx, now = ctx.currentTime, mid = now + dur * 0.5;
+      // bass swap halfway through, and the outgoing song is gently filtered as it leaves
+      const mid = when + dur * 0.5;
       const lowIn = to.low.gain, lowOut = from.low.gain;
-      lowIn.cancelScheduledValues(0); lowIn.setValueAtTime(EQ_MIN, now); lowIn.setValueAtTime(EQ_MIN, mid - 0.05); lowIn.linearRampToValueAtTime(to.eq.low, mid + 0.25);
-      lowOut.cancelScheduledValues(0); lowOut.setValueAtTime(from.eq.low, now); lowOut.setValueAtTime(from.eq.low, mid - 0.05); lowOut.linearRampToValueAtTime(EQ_MIN, mid + 0.25);
+      lowIn.cancelScheduledValues(0); lowIn.setValueAtTime(EQ_MIN, ctx.currentTime); lowIn.setValueAtTime(EQ_MIN, mid - 0.05); lowIn.linearRampToValueAtTime(to.eq.low, mid + 0.3);
+      lowOut.cancelScheduledValues(0); lowOut.setValueAtTime(from.eq.low, ctx.currentTime); lowOut.setValueAtTime(from.eq.low, mid - 0.05); lowOut.linearRampToValueAtTime(EQ_MIN, mid + 0.3);
+      if (Math.abs(from.filterVal) < 0.02) {
+        const f = from.flt.frequency;
+        f.cancelScheduledValues(0); f.setValueAtTime(22000, ctx.currentTime); f.setValueAtTime(22000, mid); f.exponentialRampToValueAtTime(700, when + dur);
+      }
     }
-    this.live = to;
-    UI.nowPlaying(); UI.mixState(true);
+    const handover = () => { if (this.mixing?.to !== to) return; this.live = to; UI.nowPlaying(); UI.mixState(true); };
+    if (when - ctx.currentTime > 0.1) setTimeout(handover, (when - ctx.currentTime) * 1000); else handover();
     Engine.fadeTo(Engine.sideOf(to), dur, () => {
       from.pause();
       from.setEq('low', from.eq.low);
+      from.setFilter(from.filterVal);
       this.mixing = null;
-      if (smart && Math.abs(to.rate - 1) > 0.002) to.glideRate(1, 10);
+      if (Math.abs(to.rate - 1) > 0.002) to.glideRate(1, 16);
       UI.mixState(false); UI.deckState();
-    });
+    }, when);
   },
   cancelMix() { if (this.mixing) Engine.cancelAnim(); },
   mixAborted() {
     if (!this.mixing) return;
+    const { from } = this.mixing;
     this.mixing = null;
+    from.setEq('low', from.eq.low); from.setFilter(from.filterVal);
     // whichever side the fader favours becomes the live deck
     this.live = Engine.x < 0.5 ? Engine.decks.A : Engine.decks.B;
     UI.mixState(false); UI.nowPlaying();
@@ -871,21 +923,20 @@ const Player = {
   },
   tick() {
     const d = this.live;
-    if (!settings.autoMix || this.mixing || !d.playing || this.repeat === 'one' || settings.crossfade <= 0) return;
-    const dur = d.duration, left = (dur - d.time) / (d.rate || 1);
-    if (!dur || dur < settings.crossfade * 2.5) return;
-    // start buffering the next song ~25 s early so the blend starts on time
-    if (left <= settings.crossfade + 25 && this.hasNext()) {
-      const nid = this.queue[this.nextIndex()], other = Engine.other(d);
-      if (other.preloadedFor !== nid && !other.loading && Lib.tracks.has(nid)) {
-        other.loading = true;
-        other.load(Lib.tracks.get(nid)).then(() => { other.preloadedFor = nid; other.seek(other.track.beatOffset || 0); }).catch(() => {}).finally(() => { other.loading = false; });
-      }
+    if (!settings.autoMix || this.mixing || !d.playing || !d.buffer || settings.crossfade <= 0) return;
+    if (d.duration < settings.crossfade * 2.5) return;
+    const p = this.plan(d);
+    const until = (p.start - d.time) / (d.rate || 1); // seconds until the blend should begin
+    if (until > 30) return;
+    const ni = this.upcomingIndex();
+    if (ni < 0) return;
+    const nid = this.queue[ni], other = Engine.other(d);
+    // load the next song ~30 s ahead so the blend starts exactly on time
+    if ((other.preloadedFor !== nid || other.track?.id !== nid) && !other.loading && Lib.tracks.has(nid)) {
+      other.loading = true;
+      other.load(Lib.tracks.get(nid)).then(() => { other.preloadedFor = nid; }).catch(() => {}).finally(() => { other.loading = false; });
     }
-    if (left <= settings.crossfade + 0.1 && this.hasNext()) {
-      const ni = this.nextIndex();
-      if (Lib.tracks.has(this.queue[ni])) this.mixTo(ni, Math.max(1, left - 0.15));
-    }
+    if (until <= 1.5) this.mixTo(ni);
   },
 };
 function shuffleArr(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
