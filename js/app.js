@@ -40,7 +40,6 @@ const settings = Object.assign({
   crossfade: 10,     // seconds of overlap between songs
   autoMix: true,     // crossfade into the next song automatically
   smartMix: true,    // beat-match tempo + phase and swap bass during the mix
-  keyLock: true,     // keep pitch when tempo changes
   volume: 1,
 }, store.get('settings', {}));
 // v2: longer, Apple-Music-style blends by default
@@ -250,7 +249,8 @@ const Analysis = (() => {
     const t = tempo(ch, buf.sampleRate);
     return { peaks: peaks(ch), duration: buf.duration, bpm: t?.bpm, beatOffset: t?.beatOffset };
   }
-  return { run };
+  function fromBuffer(buf) { const t = tempo(buf.getChannelData(0), buf.sampleRate); return { bpm: t?.bpm, beatOffset: t?.beatOffset }; }
+  return { run, fromBuffer };
 })();
 
 /* =========================================================================
@@ -447,63 +447,115 @@ const Auth = {
 /* =========================================================================
  * Audio engine — two decks, 3-band EQ + filter each, equal-power crossfader
  * ========================================================================= */
-const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
 const EQ_MIN = -26, EQ_MAX = 6;
 
+/* Decoded songs, held in memory only (nothing is written to the device).
+ * Only the songs on the two players plus the most recent few are kept. */
+const Buffers = {
+  cache: new Map(),
+  get(track) {
+    let p = this.cache.get(track.id);
+    if (p) { this.cache.delete(track.id); this.cache.set(track.id, p); return p; }
+    p = (async () => {
+      const r = await fetch(Api.fileUrl(track.audio), { credentials: 'same-origin' });
+      if (r.status === 401) { Auth.show(); throw new Error('unauthorized'); }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.arrayBuffer();
+      const ctx = Engine.ensure();
+      return new Promise((res, rej) => { const q = ctx.decodeAudioData(data, res, rej); if (q && q.then) q.then(res, rej); });
+    })();
+    p.catch(() => this.cache.delete(track.id));
+    this.cache.set(track.id, p);
+    this.trim();
+    return p;
+  },
+  trim() {
+    const keep = new Set(Object.values(Engine.decks).map((d) => d.track?.id).filter(Boolean));
+    const ids = [...this.cache.keys()];
+    for (const id of ids.slice(0, Math.max(0, ids.length - 3))) if (!keep.has(id)) this.cache.delete(id);
+  },
+};
+
+/* One player. Songs play through the Web Audio engine (not <audio> elements), so two songs
+ * can sound at the same time on iPhone and a blend starts on the exact sample. */
 class Deck {
   constructor(id) {
     this.id = id;
-    this.audio = new Audio();
-    this.audio.preload = 'auto';
-    this.audio.playsInline = true;
-    this.audio.setAttribute('playsinline', '');
-    this.track = null; this.url = null;
+    this.track = null; this.buffer = null; this.node = null;
+    this._playing = false; this.offset = 0; this.t0 = 0; this.loadToken = 0;
     this.eq = { high: 0, mid: 0, low: 0 };
     this.filterVal = 0; this.trimVal = 1; this.rate = 1; this.cue = 0;
     this.glide = null;
-    this.audio.addEventListener('ended', () => Player.onDeckEnded(this));
-    this.audio.addEventListener('play', () => UI.deckState());
-    this.audio.addEventListener('pause', () => UI.deckState());
   }
   connect(ctx, dest) {
     this.ctx = ctx;
-    this.src = ctx.createMediaElementSource(this.audio);
+    this.in = ctx.createGain();
     const bq = (type, f, q) => { const n = ctx.createBiquadFilter(); n.type = type; n.frequency.value = f; if (q) n.Q.value = q; return n; };
     this.low = bq('lowshelf', 220); this.mid = bq('peaking', 1200, 0.8); this.high = bq('highshelf', 3800);
     this.flt = bq('lowpass', 22000, 0.9);
     this.trim = ctx.createGain(); this.xf = ctx.createGain();
     this.meter = ctx.createAnalyser(); this.meter.fftSize = 256;
-    this.src.connect(this.low); this.low.connect(this.mid); this.mid.connect(this.high); this.high.connect(this.flt);
+    this.in.connect(this.low); this.low.connect(this.mid); this.mid.connect(this.high); this.high.connect(this.flt);
     this.flt.connect(this.trim); this.trim.connect(this.xf); this.trim.connect(this.meter); this.xf.connect(dest);
   }
-  get playing() { return !this.audio.paused && !this.audio.ended; }
-  get time() { return this.audio.currentTime || 0; }
-  get duration() { return isFinite(this.audio.duration) ? this.audio.duration : (this.track?.duration || 0); }
+  get playing() { return this._playing; }
+  get time() {
+    if (!this._playing || !this.ctx) return this.offset;
+    return Math.min(this.duration, this.offset + (this.ctx.currentTime - this.t0) * this.rate);
+  }
+  get duration() { return this.buffer ? this.buffer.duration : (this.track?.duration || 0); }
   get bpmNow() { return this.track?.bpm ? this.track.bpm * this.rate : null; }
   async load(track) {
-    this.audio.pause();
-    this.track = track;
+    this.stopNode(); this._playing = false;
+    this.track = track; this.buffer = null; this.offset = 0;
     this.preloadedFor = null;
     this.cue = track.beatOffset || 0;
     this.setRate(1);
-    this.audio.src = Api.fileUrl(track.audio);
-    await new Promise((res, rej) => {
-      const done = (e) => {
-        this.audio.removeEventListener('loadedmetadata', done); this.audio.removeEventListener('error', done); clearTimeout(timer);
-        e && e.type === 'error' ? rej(new Error('couldn’t load audio')) : res();
-      };
-      const timer = setTimeout(done, 20000);
-      this.audio.addEventListener('loadedmetadata', done); this.audio.addEventListener('error', done);
-    });
+    const token = ++this.loadToken;
+    const buf = await Buffers.get(track);
+    if (token !== this.loadToken) throw new Error('superseded');
+    this.buffer = buf;
+    Buffers.trim();
     UI.deckLoaded(this);
+    analyzeIfNeeded(track, buf);
   }
   unload() {
-    this.audio.pause(); this.audio.removeAttribute('src'); this.audio.load();
-    this.track = null; this.preloadedFor = null; UI.deckLoaded(this);
+    this.loadToken++; this.stopNode(); this._playing = false;
+    this.track = null; this.buffer = null; this.offset = 0; this.preloadedFor = null;
+    UI.deckLoaded(this); UI.deckState();
   }
-  play() { const p = this.audio.play(); if (p && p.catch) p.catch((e) => { console.warn(e); UI.deckState(); }); }
-  pause() { this.audio.pause(); }
-  seek(t) { try { this.audio.currentTime = clamp(t, 0, Math.max(0, this.duration - 0.05)); } catch { /* not seekable yet */ } }
+  play() {
+    if (!this.buffer || this._playing || !this.ctx) return;
+    if (this.offset >= this.duration - 0.05) this.offset = 0;
+    const n = this.ctx.createBufferSource();
+    n.buffer = this.buffer;
+    n.playbackRate.value = this.rate;
+    n.connect(this.in);
+    n.onended = () => {
+      if (n !== this.node) return;
+      this.node = null; this._playing = false; this.offset = this.duration;
+      UI.deckState(); Player.onDeckEnded(this);
+    };
+    this.t0 = this.ctx.currentTime;
+    n.start(this.t0, this.offset);
+    this.node = n; this._playing = true;
+    UI.deckState();
+  }
+  pause() {
+    if (!this._playing) return;
+    this.offset = this.time; this.stopNode(); this._playing = false;
+    UI.deckState();
+  }
+  stopNode() {
+    const n = this.node; this.node = null;
+    if (n) { n.onended = null; try { n.stop(); } catch { /* already stopped */ } try { n.disconnect(); } catch { /* ignore */ } }
+  }
+  seek(t) {
+    const was = this._playing;
+    if (was) { this.stopNode(); this._playing = false; }
+    this.offset = clamp(t, 0, Math.max(0, this.duration - 0.05));
+    if (was) this.play();
+  }
   setEq(band, db) {
     this.eq[band] = db;
     if (!this.ctx) return;
@@ -523,11 +575,9 @@ class Deck {
   setTrim(v) { this.trimVal = v; if (this.ctx) this.trim.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02); }
   setRate(r, fromGlide) {
     if (!fromGlide) this.stopGlide();
+    if (this._playing && this.ctx) { this.offset = this.time; this.t0 = this.ctx.currentTime; }
     this.rate = clamp(r, 0.84, 1.16);
-    this.audio.playbackRate = this.rate;
-    this.audio.preservesPitch = settings.keyLock;
-    this.audio.webkitPreservesPitch = settings.keyLock;
-    this.audio.mozPreservesPitch = settings.keyLock;
+    if (this.node) this.node.playbackRate.setValueAtTime(this.rate, this.ctx.currentTime);
     UI.deckRate(this);
   }
   glideRate(to, seconds) {
@@ -549,6 +599,22 @@ class Deck {
   }
 }
 
+/* Songs added without tempo info get analysed the first time they're played. */
+function analyzeIfNeeded(track, buf) {
+  if (track.analyzed || track.demo) return;
+  track.analyzed = true;
+  setTimeout(() => {
+    try {
+      const r = Analysis.fromBuffer(buf);
+      const patch = { analyzed: true };
+      if (!track.bpm && r.bpm) patch.bpm = r.bpm;
+      if (r.beatOffset != null) patch.beatOffset = r.beatOffset;
+      Object.assign(track, patch);
+      Lib.updateTrack(track.id, patch).catch(() => {});
+    } catch (e) { console.warn('analysis failed', e); }
+  }, 1500);
+}
+
 const Engine = {
   ctx: null, decks: { A: new Deck('A'), B: new Deck('B') }, x: 0, anim: null,
   ensure() {
@@ -563,13 +629,20 @@ const Engine = {
     this.analyser = ctx.createAnalyser(); this.analyser.fftSize = 2048; this.analyser.smoothingTimeConstant = 0.78;
     this.master.connect(this.limiter); this.limiter.connect(this.analyser); this.analyser.connect(ctx.destination);
     for (const d of Object.values(this.decks)) {
-      // unlock each media element inside the user gesture so later automatic plays are allowed (iOS)
-      if (!d.audio.src) { d.audio.src = SILENT; d.audio.play().then(() => d.audio.pause()).catch(() => {}); }
       d.connect(ctx, this.master);
       d.setEq('low', d.eq.low); d.setEq('mid', d.eq.mid); d.setEq('high', d.eq.high); d.setFilter(d.filterVal); d.setTrim(d.trimVal);
     }
     this.applyX(this.x, true);
     if (ctx.state !== 'running') ctx.resume();
+    // iPhone: declare music playback so sound isn't muted by the silent switch,
+    // and keep a silent media element running so the audio session stays active
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* unsupported */ }
+    try {
+      const a = this.keepAlive = new Audio();
+      a.loop = true; a.setAttribute('playsinline', '');
+      a.src = URL.createObjectURL(wav(ctx.createBuffer(1, 8000, 8000)));
+      a.play().catch(() => {});
+    } catch { /* ignore */ }
     return ctx;
   },
   gains(x) { return [Math.cos(x * Math.PI / 2), Math.sin(x * Math.PI / 2)]; },
@@ -650,7 +723,16 @@ const Player = {
     const deck = this.live, other = Engine.other(deck);
     other.pause();
     this.qi = i;
-    try { await deck.load(t); } catch { toast('Couldn’t load this song'); return; }
+    const loading = deck.load(t);
+    UI.nowPlaying();
+    const slow = setTimeout(() => toast('Loading…', 0), 500);
+    try { await loading; } catch (e) {
+      clearTimeout(slow);
+      if (e.message !== 'superseded' && e.message !== 'unauthorized') toast('Couldn’t load this song. Check your connection.');
+      return;
+    }
+    clearTimeout(slow);
+    if ($('#toast').textContent === 'Loading…') $('#toast').hidden = true;
     deck.seek(0);
     Engine.cancelAnim(); Engine.applyX(Engine.sideOf(deck), true);
     deck.play();
@@ -714,7 +796,7 @@ const Player = {
     const smart = settings.smartMix && from.track?.bpm && to.track?.bpm;
     if (smart) {
       const ratio = (from.track.bpm * from.rate) / to.track.bpm;
-      if (Math.abs(ratio - 1) <= 0.1) to.setRate(ratio);
+      if (Math.abs(ratio - 1) <= 0.06) to.setRate(ratio);
     }
     if (!to.playing) {
       let start = to.track?.beatOffset || 0;
@@ -1142,8 +1224,6 @@ const UI = {
         <input type="range" id="s-xf" min="0" max="20" step="1" value="${settings.crossfade}" aria-label="Crossfade length"></div>
       <div class="setting"><div class="setting-row"><strong>Smart Mix</strong><label class="switch"><input type="checkbox" id="s-smart" ${settings.smartMix ? 'checked' : ''}><i></i></label></div>
         <small>Matches tempo (BPM), lines up the beats, and swaps the bass halfway through.</small></div>
-      <div class="setting"><div class="setting-row"><strong>Key Lock</strong><label class="switch"><input type="checkbox" id="s-key" ${settings.keyLock ? 'checked' : ''}><i></i></label></div>
-        <small>Keeps the pitch the same when tempo changes.</small></div>
       ${compact ? '' : `<div class="setting"><div class="menu">
         <button data-s="add">${icon('plus')}Add Music from Device</button>
         <button data-s="demo">${icon('wave')}Add Demo Tracks for Mixing</button>
@@ -1158,7 +1238,6 @@ const UI = {
       xf.addEventListener('input', () => { settings.crossfade = +xf.value; $('#s-xf-out', b).textContent = xf.value + 's'; paint(); saveSettings(); this.transport(); });
       $('#s-auto', b).addEventListener('change', (e) => { settings.autoMix = e.target.checked; saveSettings(); this.transport(); });
       $('#s-smart', b).addEventListener('change', (e) => { settings.smartMix = e.target.checked; saveSettings(); });
-      $('#s-key', b).addEventListener('change', (e) => { settings.keyLock = e.target.checked; saveSettings(); for (const d of Object.values(Engine.decks)) d.setRate(d.rate); });
       if (compact) return;
       const themes = { auto: 'Automatic', dark: 'Dark', light: 'Light' };
       $('#s-theme-name', b).textContent = themes[store.get('theme', 'auto')];

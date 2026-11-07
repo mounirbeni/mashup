@@ -14,7 +14,7 @@ export async function GET(req) {
   if (range) headers.range = range;
   const r = await get(p, { access: 'private', headers });
   if (!r || !r.stream) return new Response('Not found', { status: 404 });
-  const out = new Headers({ 'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' });
+  const out = new Headers({ 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' });
   for (const h of PASS) { const v = r.headers.get(h); if (v) out.set(h, v); }
   if (!out.has('accept-ranges')) out.set('accept-ranges', 'bytes');
   return new Response(r.stream, { status: out.has('content-range') ? 206 : 200, headers: out });
