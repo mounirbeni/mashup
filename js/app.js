@@ -626,6 +626,77 @@ const Buffers = {
 
 /* One player. Songs play through the Web Audio engine (not <audio> elements), so two songs
  * can sound at the same time on iPhone and a blend starts on the exact sample. */
+/* Time-stretching (WSOLA): plays part of a song at another tempo WITHOUT changing its pitch,
+ * the way DJ software and Apple Music's AutoMix do.
+ * map: the song plays r0 source-seconds per second for tc seconds (locked to the outgoing
+ * tempo during the blend), then eases back linearly to its own tempo over tr seconds. */
+const Stretch = {
+  srcAt(m, tau) {
+    const { s0, r0, tc, tr } = m;
+    if (tau <= tc) return s0 + r0 * tau;
+    const u = Math.min(tau - tc, tr);
+    let s = s0 + r0 * tc + r0 * u + (1 - r0) * u * u / (2 * tr);
+    if (tau > tc + tr) s += tau - tc - tr;
+    return s;
+  },
+  /* decimated mono copy of a song for the similarity search (cached on the buffer) */
+  mono(buf) {
+    if (buf._mono4) return buf._mono4;
+    const nch = buf.numberOfChannels, chs = []; for (let c = 0; c < nch; c++) chs.push(buf.getChannelData(c));
+    const md = new Float32Array(Math.floor(buf.length / 4));
+    for (let i = 0; i < md.length; i++) { let s = 0; const o = i * 4; for (const x of chs) s += x[o] + x[o + 1] + x[o + 2] + x[o + 3]; md[i] = s / (4 * nch); }
+    return (buf._mono4 = md);
+  },
+  render(buf, m) {
+    const sr = buf.sampleRate, N = sr > 60000 ? 4096 : 2048, Hs = N / 4;
+    const outLen = Math.round((m.tc + m.tr) * sr);
+    const nch = buf.numberOfChannels, chs = []; for (let c = 0; c < nch; c++) chs.push(buf.getChannelData(c));
+    const len = buf.length, md = this.mono(buf);
+    const L = N / 8, R = Hs / 8;            // compare N/2 samples; search ±Hs/2 (in 4x-decimated steps)
+    const out = chs.map(() => new Float32Array(outLen + N)), wsum = new Float32Array(outLen + N);
+    const win = new Float32Array(N); for (let j = 0; j < N; j++) win[j] = 0.5 - 0.5 * Math.cos(2 * Math.PI * j / N);
+    const full = (i) => { let s = 0; for (const x of chs) s += x[i]; return s; };
+    let prev = -1;
+    for (let o = 0; o < outLen; o += Hs) {
+      let p = Math.round(this.srcAt(m, (o + N / 2) / sr) * sr - N / 2);
+      if (prev >= 0) {
+        // choose the source segment that best continues the previous one (keeps waveforms in phase)
+        const target = (prev + Hs) >> 2, base = p >> 2;
+        let best = -Infinity, bd = 0;
+        for (let d = -R; d <= R; d++) {
+          const q = base + d;
+          if (q < 0 || q + L >= md.length || target + L >= md.length) continue;
+          let dot = 0, en = 0;
+          for (let j = 0; j < L; j++) { const a = md[q + j]; dot += a * md[target + j]; en += a * a; }
+          const sc = dot / Math.sqrt(en + 1e-9);
+          if (sc > best) { best = sc; bd = d; }
+        }
+        p = (base + bd) * 4;
+        // refine to the exact sample
+        const t2 = prev + Hs; let bf = -Infinity, bo = 0;
+        for (let d = -3; d <= 3; d++) {
+          const q = p + d; if (q < 0 || q + 512 >= len || t2 + 512 >= len) continue;
+          let dot = 0, en = 0; for (let j = 0; j < 512; j += 2) { const a = full(q + j); dot += a * full(t2 + j); en += a * a; }
+          const sc = dot / Math.sqrt(en + 1e-9); if (sc > bf) { bf = sc; bo = d; }
+        }
+        p += bo;
+      }
+      if (p + N > len) p = len - N;
+      if (p < 0) p = 0;
+      for (let c = 0; c < nch; c++) { const x = chs[c], y = out[c]; for (let j = 0; j < N; j++) y[o + j] += x[p + j] * win[j]; }
+      for (let j = 0; j < N; j++) wsum[o + j] += win[j];
+      prev = p;
+    }
+    const ab = Engine.ctx.createBuffer(nch, outLen, sr);
+    for (let c = 0; c < nch; c++) {
+      const y = out[c];
+      for (let i = 0; i < outLen; i++) y[i] /= Math.max(wsum[i], 0.05);
+      ab.copyToChannel(y.subarray(0, outLen), c);
+    }
+    return { buffer: ab, map: m, outDur: outLen / sr };
+  },
+};
+
 class Deck {
   constructor(id) {
     this.id = id;
@@ -645,10 +716,17 @@ class Deck {
     this.meter = ctx.createAnalyser(); this.meter.fftSize = 256;
     this.in.connect(this.low); this.low.connect(this.mid); this.mid.connect(this.high); this.high.connect(this.flt);
     this.flt.connect(this.trim); this.trim.connect(this.xf); this.trim.connect(this.meter); this.xf.connect(dest);
+    // echo-out: a tempo-synced, filtered echo used when two songs' tempos are too far apart to blend
+    this.echoSend = ctx.createGain(); this.echoSend.gain.value = 0;
+    this.echoDelay = ctx.createDelay(2); this.echoFb = ctx.createGain(); this.echoFb.gain.value = 0.42;
+    const ehp = bq('highpass', 320), elp = bq('lowpass', 4200);
+    this.trim.connect(this.echoSend); this.echoSend.connect(ehp); ehp.connect(elp); elp.connect(this.echoDelay);
+    this.echoDelay.connect(this.echoFb); this.echoFb.connect(this.echoDelay); this.echoDelay.connect(dest);
   }
   get playing() { return this._playing; }
   get time() {
     if (!this._playing || !this.ctx) return this.offset;
+    if (this.stretch && this.ctx.currentTime < this.stretch.tSwitch) return Stretch.srcAt(this.stretch.map, Math.max(0, this.ctx.currentTime - this.stretch.at));
     return Math.min(this.duration, this.offset + Math.max(0, this.ctx.currentTime - this.t0) * this.rate);
   }
   get duration() { return this.buffer ? this.buffer.duration : (this.track?.duration || 0); }
@@ -656,7 +734,7 @@ class Deck {
   async load(track) {
     this.stopNode(); this._playing = false;
     this.track = track; this.buffer = null; this.offset = 0;
-    this.preloadedFor = null;
+    this.preloadedFor = null; this.prepared = null;
     this.cue = track.beatOffset || 0;
     this.setRate(1);
     const token = ++this.loadToken;
@@ -690,6 +768,29 @@ class Deck {
     this.node = n; this._playing = true;
     UI.deckState();
   }
+  playStretched(when, st) {
+    if (!this.buffer || !this.ctx) return;
+    this.stopNode(); this._playing = false;
+    const ctx = this.ctx, at = Math.max(ctx.currentTime, when || 0), xfade = 0.03;
+    const tSwitch = at + st.outDur - xfade, sSwitch = Stretch.srcAt(st.map, st.outDur - xfade);
+    const n1 = ctx.createBufferSource(), g1 = ctx.createGain();
+    n1.buffer = st.buffer; n1.connect(g1); g1.connect(this.in);
+    g1.gain.setValueAtTime(1, ctx.currentTime); g1.gain.setValueAtTime(1, tSwitch); g1.gain.linearRampToValueAtTime(0, tSwitch + xfade);
+    n1.start(at); n1.stop(tSwitch + xfade + 0.05);
+    const n2 = ctx.createBufferSource(), g2 = ctx.createGain();
+    n2.buffer = this.buffer; n2.connect(g2); g2.connect(this.in);
+    g2.gain.setValueAtTime(0, ctx.currentTime); g2.gain.setValueAtTime(0, tSwitch); g2.gain.linearRampToValueAtTime(1, tSwitch + xfade);
+    n2.onended = () => {
+      if (n2 !== this.node) return;
+      this.node = null; this._playing = false; this.offset = this.duration; this.stopNode();
+      UI.deckState(); Player.onDeckEnded(this);
+    };
+    n2.start(tSwitch, sSwitch);
+    this.rate = 1;
+    this.node = n2; this.extra = [n1, g1, g2]; this.stretch = { at, map: st.map, tSwitch };
+    this.t0 = tSwitch; this.offset = sSwitch; this._playing = true;
+    UI.deckState();
+  }
   pause() {
     if (!this._playing) return;
     this.offset = this.time; this.stopNode(); this._playing = false;
@@ -698,6 +799,8 @@ class Deck {
   stopNode() {
     const n = this.node; this.node = null;
     if (n) { n.onended = null; try { n.stop(); } catch { /* already stopped */ } try { n.disconnect(); } catch { /* ignore */ } }
+    if (this.extra) { for (const x of this.extra) { try { x.stop && x.stop(); } catch { /* ignore */ } try { x.disconnect(); } catch { /* ignore */ } } this.extra = null; }
+    this.stretch = null;
   }
   seek(t) {
     const was = this._playing;
@@ -974,20 +1077,26 @@ const Player = {
     if (this.repeat === 'one') return this.qi;
     return this.hasNext() ? this.nextIndex() : -1;
   },
-  /* Can these two songs be beat-matched? Returns the rate for the incoming song so its beats
-   * land on the outgoing beats (same tempo within 6 %, or double / half time), or null. */
+  /* Can these two songs be beat-matched? The incoming song is time-stretched (pitch kept) to the
+   * outgoing tempo, which sounds clean up to about ±22 %; double / half time count too.
+   * Returns the source-seconds-per-second rate for the incoming song, or null. */
   tempoMatch(from, toTrack) {
     if (!settings.smartMix) return null;
     const a = from.track, b = toTrack;
     if (!a?.bpm || !b?.bpm) return null;
     if ((a.beatConf ?? 1) < 0.04 || (b.beatConf ?? 1) < 0.04) return null; // beat grid not trustworthy
     const out = a.bpm * from.rate;
-    for (const mult of [1, 2, 0.5]) { const rate = out / (b.bpm * mult); if (Math.abs(rate - 1) <= 0.06) return { rate, mult }; }
-    return null;
+    let best = null;
+    for (const mult of [1, 2, 0.5]) {
+      const rate = out / (b.bpm * mult), d = Math.abs(Math.log(rate));
+      if (d <= Math.log(1.22) && (!best || d < best.d)) best = { rate, mult, d };
+    }
+    return best;
   },
   /* When and how to leave a song.
    * blend: tempos match → a long, beat-matched blend, a whole number of bars, starting on a bar line.
-   * fade:  tempos don't match → a short transition of a few beats so two rhythms never clash. */
+   * echo:  tempos too far apart → the old song echoes out on its last beat while the new one
+   *        drops in on its first beat, so two rhythms never play against each other. */
   plan(from, toTrack) {
     const out = from.points?.mixOut || from.duration;
     const t = from.track, beat = t?.bpm ? 60 / t.bpm : 0, bar = beat * 4;
@@ -997,8 +1106,8 @@ const Player = {
       style = 'blend'; len = settings.crossfade;
       if (bar) len = Math.max(2, Math.round(len / bar)) * bar;
     } else {
-      style = 'fade';
-      len = Math.min(settings.crossfade, beat ? beat * Math.max(2, Math.round(3 / beat)) : 3);
+      style = 'echo';
+      len = beat ? clamp(beat * 2, 0.8, 1.6) : 1.2;
     }
     len = Math.min(len, out * 0.4);
     let start = out - len;
@@ -1029,8 +1138,8 @@ const Player = {
     const ctx = Engine.ensure(), now = ctx.currentTime + 0.05;
     let when = now, len, style;
     if (quick) {
-      style = this.tempoMatch(from, t) ? 'blend' : 'fade';
-      len = (style === 'blend' ? Math.min(settings.crossfade || 4, 4) : 2) * from.rate;
+      style = this.tempoMatch(from, t) ? 'blend' : 'echo';
+      len = (style === 'blend' ? Math.min(settings.crossfade || 4, 4) : 1.2) * from.rate;
     } else {
       const p = this.plan(from, t);
       len = p.len; style = p.style;
@@ -1048,13 +1157,13 @@ const Player = {
     // Freeze any post-mix tempo recovery before calculating the next beat grid.
     from.stopGlide(); to.stopGlide();
     const match = style === 'blend' ? this.tempoMatch(from, to.track) : null;
-    // Incompatible rhythms must not play together: the old song fades out, then the new one fades in.
-    const separated = smart && style === 'fade';
-    if (separated) dur = Math.min(dur, 0.8);
+    // Incompatible rhythms must not play together: the old song echoes out, then the new one comes in.
+    const separated = smart && style === 'echo';
+    if (separated) dur = Math.min(dur, 1.6);
     const remaining = (from.duration - from.time) / from.rate - (when - ctx.currentTime);
     dur = Math.max(0.02, Math.min(dur, remaining - 0.02));
     to.pause();
-    to.setRate(match ? match.rate : 1);
+    to.setRate(1);
     let start = this.entryPoint(to);
     if (match && from.playing) {
       // land the incoming beat exactly on the outgoing beat (counting in the incoming song's beats)
@@ -1062,16 +1171,27 @@ const Player = {
       const beats = (at - (from.track.beatOffset || 0)) / (60 / from.track.bpm) / match.mult;
       start += (beats - Math.floor(beats)) * 60 / to.track.bpm;
     }
-    to.seek(Math.min(start, Math.max(0, to.duration - dur * to.rate - 1)));
+    start = Math.min(start, Math.max(0, to.duration - dur * 1.3 - 1));
     if (separated) {
-      // the new song starts as its fade-in begins, so its first beat is heard, not lost in silence;
-      // the old song is filtered away while it fades out
-      to.play(when + dur * 0.5);
+      // echo-out: the old song's last beat repeats as a filtered, tempo-synced echo and rings out,
+      // while it fades; the new song starts as its fade-in begins, so its first beat is heard
+      const beat = from.track?.bpm ? 60 / from.track.bpm / from.rate : 0.5;
+      from.echoDelay.delayTime.setValueAtTime(Math.min(1.9, beat * 0.75), ctx.currentTime);
+      const es = from.echoSend.gain;
+      es.cancelScheduledValues(0); es.setValueAtTime(0, ctx.currentTime); es.setValueAtTime(0, when);
+      es.linearRampToValueAtTime(0.9, when + 0.04); es.setValueAtTime(0.9, when + dur * 0.5); es.linearRampToValueAtTime(0, when + dur * 0.5 + 0.06);
+      to.seek(start); to.play(when + dur * 0.5);
       if (Math.abs(from.filterVal) < 0.02) {
         const f = from.flt.frequency;
         f.cancelScheduledValues(0); f.setValueAtTime(22000, ctx.currentTime); f.setValueAtTime(22000, when); f.exponentialRampToValueAtTime(400, when + dur * 0.5);
       }
-    } else to.play(when);
+    } else if (match && Math.abs(match.rate - 1) > 0.003) {
+      // the incoming song enters at the outgoing tempo (time-stretched, pitch unchanged) and
+      // eases back to its own tempo over the next bars after the blend
+      const st = this.stretchFor(to, start, match.rate, dur);
+      if (st) to.playStretched(when, st);
+      else { to.seek(start); to.setRate(match.rate); to.play(when); } // fallback: plain rate change
+    } else { to.seek(start); to.play(when); }
     if (smart && style === 'blend') {
       // bass swap halfway through, and the outgoing song is gently filtered as it leaves
       const mid = when + dur * 0.5;
@@ -1093,6 +1213,17 @@ const Player = {
       if (Math.abs(to.rate - 1) > 0.002) to.glideRate(1, 16);
       UI.mixState(false); UI.deckState();
     }, when, separated);
+  },
+  /* the stretched intro for deck `to`, reusing one prepared ahead of time when it matches */
+  stretchFor(to, start, rate, dur) {
+    const tr = clamp(16 * 60 / to.track.bpm, 6, 14); // ease back to its own tempo over ~16 beats
+    const key = `${to.track.id}|${start.toFixed(2)}|${rate.toFixed(4)}|${dur.toFixed(1)}`;
+    if (to.prepared?.key === key) return to.prepared.st;
+    try {
+      const st = Stretch.render(to.buffer, { s0: start, r0: rate, tc: dur, tr });
+      to.prepared = { key, st };
+      return st;
+    } catch (e) { console.warn('stretch failed', e); return null; }
   },
   cancelMix() { if (this.mixing) Engine.cancelAnim(); },
   mixAborted() {
@@ -1124,6 +1255,13 @@ const Player = {
     if ((other.preloadedFor !== nid || other.track?.id !== nid) && !other.loading && Lib.tracks.has(nid)) {
       other.loading = true;
       other.load(Lib.tracks.get(nid)).then(() => { other.preloadedFor = nid; }).catch(() => {}).finally(() => { other.loading = false; });
+    }
+    if (until <= 20 && until > 3 && p.style === 'blend' && other.preloadedFor === nid && other.buffer && !other.preparing) {
+      const m = this.tempoMatch(d, other.track);
+      if (m && Math.abs(m.rate - 1) > 0.003) {
+        other.preparing = true;
+        setTimeout(() => { try { this.stretchFor(other, this.entryPoint(other), m.rate, p.len / d.rate); } finally { other.preparing = false; } }, 0);
+      }
     }
     if (until <= 1.5) this.mixTo(ni);
   },
@@ -2128,7 +2266,7 @@ async function boot() {
   if ('serviceWorker' in navigator && /^https:|^http:\/\/localhost/.test(location.href) && !window.__NO_SW__) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  window.__mazj = { Engine, Player, Lib, UI, settings, Local, Tags, Lyrics, Analysis }; // for debugging
+  window.__mazj = { Engine, Player, Lib, UI, settings, Local, Tags, Lyrics, Analysis, Stretch }; // for debugging
   const open = async () => {
     toast('Loading your library…', 0);
     try { await Lib.load(); $('#toast').hidden = true; }
