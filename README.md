@@ -24,23 +24,34 @@ A phone-first music player in the style of modern music apps, with **AutoMix**: 
 2. Tap **+** and pick audio files from Files or your device storage.
 3. To install it as an app: **Share → Add to Home Screen**.
 
-> Your files are stored on your device only (IndexedDB); nothing is uploaded. Songs from Apple Music or Spotify can't be played, because a website can't access them. You need audio files you own.
+> Your songs are uploaded to a **private cloud library** (Vercel Blob), so they play on any phone or computer where you sign in. Nothing is public: every song and cover is served only to a signed-in browser. Songs from Apple Music or Spotify can't be played, because a website can't access them. You need audio files you own.
+
+## Cloud library and sign-in
+
+- **Storage:** a private Vercel Blob store (`mashup-music`) holds the songs, covers and `library.json` (song info, favorites, playlists).
+- **Sign-in:** one password, set as the `APP_PASSWORD` environment variable. Sessions last 180 days and are signed with `SESSION_SECRET`.
+- **Change the password:** Vercel → project **mashup** → Settings → Environment Variables → edit `APP_PASSWORD`, then redeploy. To sign every device out as well, change `SESSION_SECRET` too.
+- **Songs from older versions:** songs added before the cloud library were kept in that browser only. The app shows an **Upload** banner on that device to move them to the cloud.
+
+| Route | What it does |
+|---|---|
+| `POST /api/login` | Checks the password and sets the session cookie (`GET` = status, `DELETE` = sign out) |
+| `GET /api/library` | Returns songs and playlists |
+| `POST /api/library` | Applies one change: `addTrack`, `updateTrack`, `deleteTrack`, `savePlaylist`, `deletePlaylist`, `wipe` |
+| `POST /api/upload` | Issues a short-lived token so the browser uploads a file straight to Blob storage |
+| `GET /api/file?p=…` | Streams a song or cover, with `Range` support for seeking |
 
 ## Deploying
 
-It's a static site with no build step. On Vercel, import the repo with the framework preset **Other** and no build command. To run it locally:
-
-```bash
-python3 -m http.server 8000
-# then open http://localhost:8000
-```
+Static front end plus Node functions in `api/`; Vercel installs `@vercel/blob` from `package.json`. Functions run in Paris (`cdg1`, see `vercel.json`), next to the Blob store. `js/vendor/blob-upload.js` is the browser upload helper from `@vercel/blob/client`, bundled with esbuild.
 
 ## Structure
 
 ```
 index.html            App markup
 css/style.css         Styles (dark/light)
-js/app.js             Library, tag reading, BPM analysis, audio engine, UI
+js/app.js             Cloud library, sign-in, tag reading, BPM analysis, audio engine, UI
+api/                  Sign-in, library, upload and streaming routes
 sw.js                 Offline support
 manifest.webmanifest  Install-as-app settings
 ```
