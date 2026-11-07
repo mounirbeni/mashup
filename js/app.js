@@ -19,6 +19,11 @@ const fmt = (sec) => {
 };
 const hashHue = (str) => { let h = 0; for (const c of String(str)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h % 360; };
 const collator = new Intl.Collator(['ar', 'en'], { sensitivity: 'base', numeric: true });
+const hslToRgb = (h, s, l) => {
+  const k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+  return [f(0), f(8), f(4)].map((v) => Math.round(v * 255));
+};
 const icon = (name) => `<svg><use href="#i-${name}"/></svg>`;
 const songsLabel = (n) => n === 0 ? 'No songs' : n === 1 ? '1 song' : `${n} songs`;
 
@@ -1112,6 +1117,8 @@ const UI = {
   async tint(t, url) {
     const h = hashHue((t.album || t.title) + t.artist);
     let col = `hsl(${h} 55% 28%)`, col2 = `hsl(${(h + 40) % 360} 60% 16%)`;
+    this.vizImg = null;
+    this.vizRGB = hslToRgb(h, 0.62, 0.46);
     if (url) {
       try {
         const img = new Image(); img.src = url; await img.decode();
@@ -1121,6 +1128,7 @@ const UI = {
         let r = 0, gg = 0, b = 0, n = 0;
         for (let i = 0; i < d.length; i += 4) { r += d[i]; gg += d[i + 1]; b += d[i + 2]; n++; }
         r /= n; gg /= n; b /= n;
+        this.vizImg = img; this.vizRGB = [r | 0, gg | 0, b | 0];
         const k = 0.55;
         col = `rgb(${r * k | 0},${gg * k | 0},${b * k | 0})`; col2 = `rgb(${r * 0.25 | 0},${gg * 0.25 | 0},${b * 0.25 | 0})`;
       } catch { /* keep hue tint */ }
@@ -1495,7 +1503,6 @@ function wav(buf) {
 /* =========================================================================
  * Visuals — progress and spectrum
  * ========================================================================= */
-let vizData;
 function frame() {
   const d = Player.live;
   if (d.track) {
@@ -1510,28 +1517,169 @@ function frame() {
   if (!$('#np-viz').hidden && $('#np').classList.contains('open')) drawViz();
   requestAnimationFrame(frame);
 }
-function drawViz() {
-  const c = $('#np-viz'); if (!Engine.analyser) return;
-  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
-  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
-  const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
-  const a = Engine.analyser;
-  vizData = vizData || new Uint8Array(a.frequencyBinCount);
-  a.getByteFrequencyData(vizData);
-  const bars = 48, cx = w / 2, cy = h / 2, r0 = w * 0.2;
-  g.fillStyle = 'rgba(255,255,255,.9)';
-  for (let i = 0; i < bars; i++) {
-    const idx = Math.floor(Math.pow(i / bars, 1.8) * 380) + 2;
-    const v = vizData[idx] / 255;
-    const ang = (i / bars) * Math.PI * 2 - Math.PI / 2;
-    const len = 6 + v * w * 0.26;
-    g.save(); g.translate(cx, cy); g.rotate(ang);
-    g.globalAlpha = 0.35 + v * 0.65;
-    g.fillRect(r0, -2.5, len, 5);
+/* Now Playing visualizer: mirrored, log-spaced spectrum ring with auto-levelling per band,
+ * fast-attack / slow-release motion, falling peak caps, a beat-reactive centre that spins the
+ * cover like a record, and ripples on each kick. Colours come from the song's artwork. */
+const Viz = {
+  BANDS: 36,
+  level: null, peak: null, peakHold: null, ceil: null,
+  bassAvg: 0, lastBeat: 0, pulse: 0, spin: 0, idle: 0, rings: [], t: 0,
+  freq: null, edges: null,
+  reduce: matchMedia('(prefers-reduced-motion: reduce)'),
+  setup(a) {
+    const n = this.BANDS;
+    this.level = new Float32Array(n); this.peak = new Float32Array(n); this.peakHold = new Float32Array(n);
+    this.ceil = new Float32Array(n).fill(0.35);
+    this.freq = new Uint8Array(a.frequencyBinCount);
+    // log-spaced band edges from 35 Hz to 15 kHz, in FFT bins
+    const hz = a.context.sampleRate / a.fftSize, lo = 35, hi = Math.min(15000, a.context.sampleRate / 2.2);
+    this.edges = Array.from({ length: n + 1 }, (_, i) => Math.max(1, Math.round(lo * Math.pow(hi / lo, i / n) / hz)));
+    for (let i = 1; i <= n; i++) if (this.edges[i] <= this.edges[i - 1]) this.edges[i] = this.edges[i - 1] + 1;
+    a.minDecibels = -90; a.maxDecibels = -18; a.smoothingTimeConstant = 0.55;
+    this.analyser = a;
+  },
+  color() {
+    // the song's tint, lifted so it reads on the dark background
+    const [r, g, b] = UI.vizRGB || [190, 70, 80];
+    const lift = (v) => Math.round(v + (255 - v) * 0.55);
+    return { base: `rgb(${r},${g},${b})`, light: `rgb(${lift(r)},${lift(g)},${lift(b)})`, rgb: [lift(r), lift(g), lift(b)] };
+  },
+  draw(dt) {
+    const c = $('#np-viz'), a = Engine.analyser;
+    if (!a) return;
+    if (this.analyser !== a) this.setup(a);
+    const dpr = Math.min(3, window.devicePixelRatio || 1), w = c.clientWidth, h = c.clientHeight;
+    if (!w) return;
+    if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+    const g = c.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+    const playing = Player.playing, calm = this.reduce.matches;
+    this.t += dt;
+
+    // ---- analyse ----
+    a.getByteFrequencyData(this.freq);
+    const n = this.BANDS, f = this.freq, E = this.edges;
+    let bass = 0;
+    for (let i = 0; i < n; i++) {
+      let s = 0, m = 0;
+      for (let k = E[i]; k < E[i + 1]; k++) { s += f[k]; if (f[k] > m) m = f[k]; }
+      let v = (0.6 * m + 0.4 * s / (E[i + 1] - E[i])) / 255;
+      v *= 1 + i / n * 0.6;                                // lift the highs a little (spectral tilt)
+      this.ceil[i] = Math.max(v, this.ceil[i] * 0.997, 0.25); // per-band auto-level
+      v = Math.min(1, v / this.ceil[i]);
+      v = playing ? Math.pow(v, 1.6) : 0;
+      // fast attack, slow release
+      const L = this.level[i];
+      this.level[i] = v > L ? L + (v - L) * Math.min(1, dt * 28) : L + (v - L) * Math.min(1, dt * 5);
+      if (this.level[i] >= this.peak[i]) { this.peak[i] = this.level[i]; this.peakHold[i] = 0.35; }
+      else if ((this.peakHold[i] -= dt) <= 0) this.peak[i] = Math.max(this.level[i], this.peak[i] - dt * 0.55);
+      if (i < 5) bass += this.level[i] / 5;
+    }
+
+    // ---- beat ----
+    this.bassAvg += (bass - this.bassAvg) * Math.min(1, dt * 2.5);
+    const now = this.t;
+    if (playing && bass > 0.32 && bass > this.bassAvg * 1.28 && now - this.lastBeat > 0.28) {
+      this.lastBeat = now; this.pulse = 1;
+      if (!calm) this.rings.push({ r: 0, a: 0.55 });
+    }
+    this.pulse = Math.max(0, this.pulse - dt * 3.2);
+    this.idle += ((playing ? 0 : 1) - this.idle) * Math.min(1, dt * 2);
+    if (playing && !calm) this.spin += dt * 0.35;
+
+    // ---- geometry ----
+    const cx = w / 2, cy = h / 2, S = Math.min(w, h);
+    const R = S * 0.215 * (1 + this.pulse * 0.045 + Math.sin(now * 1.6) * 0.012 * this.idle);
+    const maxLen = S * 0.25;
+    const col = this.color();
+
+    // soft glow behind everything
+    const glow = g.createRadialGradient(cx, cy, R * 0.6, cx, cy, R * 2.4);
+    glow.addColorStop(0, `rgba(${col.rgb.join(',')},${0.22 + bass * 0.25 + this.pulse * 0.12})`);
+    glow.addColorStop(1, `rgba(${col.rgb.join(',')},0)`);
+    g.fillStyle = glow; g.fillRect(0, 0, w, h);
+
+    // ripples on each kick
+    g.lineWidth = 1.5;
+    this.rings = this.rings.filter((ring) => {
+      ring.r += dt * S * 0.32; ring.a -= dt * 0.55;
+      if (ring.a <= 0) return false;
+      g.strokeStyle = `rgba(255,255,255,${ring.a * 0.5})`;
+      g.beginPath(); g.arc(cx, cy, R + 6 + ring.r, 0, Math.PI * 2); g.stroke();
+      return true;
+    });
+
+    // mirrored spectrum: bass at the bottom, highs meeting at the top
+    const bars = n * 2, step = (Math.PI * 2) / bars;
+    const thick = Math.max(2.5, (2 * Math.PI * (R + 7) / bars) * 0.5);
+    g.lineCap = 'round';
+    for (let j = 0; j < bars; j++) {
+      const i = j < n ? j : bars - 1 - j;                       // mirror
+      const v = this.level[i];
+      const breathe = this.idle * (0.05 + 0.04 * Math.sin(now * 2 + i * 0.35));
+      const len = 3 + (v + breathe) * maxLen;
+      const ang = Math.PI / 2 + (j + 0.5) * step;               // start at the bottom
+      const cos = Math.cos(ang), sin = Math.sin(ang), r0 = R + 7;
+      g.strokeStyle = `rgba(${col.rgb.join(',')},${0.45 + v * 0.55})`;
+      g.lineWidth = thick;
+      g.beginPath(); g.moveTo(cx + cos * r0, cy + sin * r0); g.lineTo(cx + cos * (r0 + len), cy + sin * (r0 + len)); g.stroke();
+      // bright core on loud bands
+      if (v > 0.35) {
+        g.strokeStyle = `rgba(255,255,255,${(v - 0.35) * 0.9})`;
+        g.lineWidth = thick * 0.45;
+        g.beginPath(); g.moveTo(cx + cos * r0, cy + sin * r0); g.lineTo(cx + cos * (r0 + len * 0.85), cy + sin * (r0 + len * 0.85)); g.stroke();
+      }
+      // falling peak cap
+      const pk = this.peak[i];
+      if (pk > 0.04) {
+        const pr = r0 + 3 + pk * maxLen + thick;
+        g.fillStyle = `rgba(255,255,255,${0.35 + pk * 0.5})`;
+        g.beginPath(); g.arc(cx + cos * pr, cy + sin * pr, thick * 0.38, 0, Math.PI * 2); g.fill();
+      }
+    }
+
+    // centre: the cover, spinning like a record, with a light ring that thumps on the beat
+    g.save();
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.closePath();
+    g.shadowColor = 'rgba(0,0,0,.45)'; g.shadowBlur = 24;
+    g.fillStyle = col.base; g.fill();
+    g.shadowBlur = 0;
+    g.clip();
+    g.translate(cx, cy); g.rotate(this.spin);
+    const img = UI.vizImg;
+    if (img && img.complete && img.naturalWidth) g.drawImage(img, -R, -R, R * 2, R * 2);
+    else {
+      const gr = g.createLinearGradient(-R, -R, R, R);
+      gr.addColorStop(0, col.light); gr.addColorStop(1, col.base);
+      g.fillStyle = gr; g.fillRect(-R, -R, R * 2, R * 2);
+      // record label
+      const lab = g.createRadialGradient(0, 0, 0, 0, 0, R * 0.42);
+      lab.addColorStop(0, 'rgba(255,255,255,.55)'); lab.addColorStop(1, 'rgba(255,255,255,.22)');
+      g.fillStyle = lab; g.beginPath(); g.arc(0, 0, R * 0.38, 0, Math.PI * 2); g.fill();
+      g.fillStyle = 'rgba(255,255,255,.7)'; g.fillRect(-R * 0.2, -R * 0.2, R * 0.14, R * 0.035); // a tick on the label shows the spin
+    }
+    // vinyl grooves + sheen
+    g.strokeStyle = 'rgba(0,0,0,.18)'; g.lineWidth = 1;
+    for (let k = 0.45; k < 1; k += 0.11) { g.beginPath(); g.arc(0, 0, R * k, 0, Math.PI * 2); g.stroke(); }
+    const sheen = g.createLinearGradient(-R, -R, R, R);
+    sheen.addColorStop(0, 'rgba(255,255,255,.18)'); sheen.addColorStop(0.5, 'rgba(255,255,255,0)'); sheen.addColorStop(1, 'rgba(255,255,255,.08)');
+    g.fillStyle = sheen; g.fillRect(-R, -R, R * 2, R * 2);
     g.restore();
-  }
-  const lowE = (vizData[2] + vizData[3] + vizData[4]) / 765;
-  g.globalAlpha = 0.18 + lowE * 0.4; g.beginPath(); g.arc(cx, cy, r0 * (0.8 + lowE * 0.3), 0, Math.PI * 2); g.fill(); g.globalAlpha = 1;
+    // spindle hole
+    g.fillStyle = 'rgba(10,8,12,.85)';
+    g.beginPath(); g.arc(cx, cy, R * 0.09, 0, Math.PI * 2); g.fill();
+    // edge ring
+    g.strokeStyle = `rgba(255,255,255,${0.25 + this.pulse * 0.55})`;
+    g.lineWidth = 1.5 + this.pulse * 2;
+    g.beginPath(); g.arc(cx, cy, R + 1, 0, Math.PI * 2); g.stroke();
+  },
+};
+let vizLast = 0;
+function drawViz() {
+  const now = performance.now();
+  const dt = Math.min(0.05, vizLast ? (now - vizLast) / 1000 : 0.016);
+  vizLast = now;
+  Viz.draw(dt);
 }
 
 /* =========================================================================

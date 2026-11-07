@@ -187,7 +187,8 @@ h1, h2, h3 { text-wrap: balance; margin: 0; }
 .np-grab span { display: block; width: 40px; height: 5px; border-radius: 3px; background: rgba(255,255,255,.45); }
 .np-stage { flex: 1; min-height: 0; display: grid; place-items: center; container-type: size; }
 .np-stage .art.xl, .np-viz { width: min(100cqw, 100cqh, 360px); height: auto; }
-.np-viz { aspect-ratio: 1; max-width: 100%; border-radius: 14px; background: rgba(0,0,0,.25); }
+.np-viz { aspect-ratio: 1; max-width: 100%; background: transparent; }
+.np-stage .np-viz { width: min(100cqw, 100cqh, 420px); }
 .np-info { display: flex; align-items: center; gap: 6px; }
 .np-text { flex: 1; min-width: 0; }
 .np-text h2 { font-family: var(--font-display); font-size: 21px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
