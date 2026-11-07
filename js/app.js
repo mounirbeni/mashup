@@ -37,12 +37,14 @@ const store = {
 };
 
 const settings = Object.assign({
-  crossfade: 6,      // seconds of overlap between songs
+  crossfade: 10,     // seconds of overlap between songs
   autoMix: true,     // crossfade into the next song automatically
   smartMix: true,    // beat-match tempo + phase and swap bass during the mix
   keyLock: true,     // keep pitch when tempo changes
   volume: 1,
 }, store.get('settings', {}));
+// v2: longer, Apple-Music-style blends by default
+if (!settings.v) { settings.crossfade = Math.max(settings.crossfade, 10); settings.v = 2; }
 const saveSettings = () => store.set('settings', settings);
 
 /* =========================================================================
@@ -776,13 +778,19 @@ const UI = {
     }
     this.hydrateArt(c);
   },
+  favIds() { return Lib.sorted().filter((t) => t.fav).map((t) => t.id); },
+  getPl(id) {
+    if (id === '__fav') return { id, name: 'Favorites', trackIds: this.favIds(), virtual: true };
+    return Lib.playlists.find((p) => p.id === id);
+  },
   renderPlaylists() {
     const c = $('#pl-content');
-    if (!Lib.playlists.length) {
+    const all = this.favIds().length ? [this.getPl('__fav'), ...Lib.playlists] : Lib.playlists;
+    if (!all.length) {
       c.innerHTML = `<div class="empty"><div class="empty-art">${icon('list')}</div><h2>No playlists yet</h2><p>Create a playlist and AutoMix will blend its songs back to back.</p><button class="primary-btn" data-act="new-pl">${icon('plus')}New Playlist</button></div>`;
       return;
     }
-    c.innerHTML = `<div class="grid">${Lib.playlists.map((pl) => `<button class="tile" data-act="open-pl" data-pl="${esc(pl.id)}">${this.coverHTML(pl)}<span class="t1">${esc(pl.name)}</span><span class="t2">${songsLabel(pl.trackIds.length)}</span></button>`).join('')}</div>`;
+    c.innerHTML = `<div class="grid">${all.map((pl) => `<button class="tile" data-act="open-pl" data-pl="${esc(pl.id)}">${this.coverHTML(pl)}<span class="t1">${esc(pl.name)}</span><span class="t2">${songsLabel(pl.trackIds.length)}</span></button>`).join('')}</div>`;
     this.hydrateArt(c);
   },
   coverHTML(pl, big) {
@@ -792,13 +800,14 @@ const UI = {
     return big ? four : `<div class="pl-cover" style="width:100%;box-shadow:none">${four}</div>`;
   },
   renderPlaylist() {
-    const pl = Lib.playlists.find((p) => p.id === this.plId);
+    const pl = this.getPl(this.plId);
     if (!pl) { this.plId = null; this.showView('playlists'); return; }
     const ts = pl.trackIds.map((id) => Lib.tracks.get(id)).filter(Boolean);
     const cover = $('#pl-cover');
     cover.className = 'pl-cover' + (ts.length < 4 ? ' single' : '');
     cover.innerHTML = this.coverHTML(pl, true);
     $('#pl-name').textContent = pl.name;
+    $('#pl-more').hidden = !!pl.virtual; $('#pl-add-songs').hidden = !!pl.virtual;
     const total = ts.reduce((s, t) => s + (t.duration || 0), 0);
     $('#pl-meta').textContent = `${songsLabel(ts.length)} · ${Math.round(total / 60)} min`;
     this.currentListIds = ts.map((t) => t.id);
@@ -888,9 +897,12 @@ const UI = {
     $('#np-play use').setAttribute('href', '#i-' + ic);
     $('#mini-play use').setAttribute('href', '#i-' + ic);
     $('#np').classList.toggle('paused', !playing);
-    $('#np-shuffle').setAttribute('aria-pressed', Player.shuffle);
-    $('#np-repeat').setAttribute('aria-pressed', Player.repeat !== 'off');
-    $('#np-rep1').hidden = Player.repeat !== 'one';
+    const fav = !!Player.current?.fav;
+    $('#np-fav use').setAttribute('href', fav ? '#i-star-fill' : '#i-star');
+    $('#np-fav').setAttribute('aria-pressed', fav);
+    const qs = $('#q-shuffle'), qr = $('#q-repeat');
+    if (qs) qs.setAttribute('aria-pressed', Player.shuffle);
+    if (qr) { qr.setAttribute('aria-pressed', Player.repeat !== 'off'); $('b', qr).hidden = Player.repeat !== 'one'; }
     $('#np-xf-btn').setAttribute('aria-pressed', settings.autoMix && settings.crossfade > 0);
     this.markPlaying();
   },
@@ -917,12 +929,13 @@ const UI = {
   closeSheet() { $('#sheet').hidden = true; $('#scrim').hidden = true; $('#sheet-body').innerHTML = ''; },
   trackMenu(id, ctx) {
     const t = Lib.tracks.get(id); if (!t) return;
-    const inPl = ctx === 'pl' && this.plId;
+    const inPl = ctx === 'pl' && this.plId && this.plId !== '__fav';
     this.openSheet(`
       <div class="sheet-head">${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}${t.bpm ? ` · ${Math.round(t.bpm)} BPM` : ''}</span></span></div>
       <div class="menu">
         <button data-m="next">${icon('queue')}Play Next</button>
         <button data-m="queue">${icon('list')}Add to Queue</button>
+        <button data-m="fav">${icon(t.fav ? 'star-fill' : 'star')}${t.fav ? 'Remove from Favorites' : 'Add to Favorites'}</button>
         <button data-m="pl">${icon('plus')}Add to Playlist…</button>
         ${inPl ? `<button data-m="unpl">${icon('trash')}Remove from this Playlist</button>` : ''}
         <button data-m="del" class="danger">${icon('trash')}Delete from Library</button>
@@ -931,6 +944,7 @@ const UI = {
         const m = e.target.closest('[data-m]')?.dataset.m; if (!m) return;
         if (m === 'next') { this.closeSheet(); Player.playNext(id); }
         if (m === 'queue') { this.closeSheet(); Player.addToQueue(id); }
+        if (m === 'fav') { this.closeSheet(); toggleFav(id); }
         if (m === 'pl') this.pickPlaylist(id);
         if (m === 'unpl') {
           const pl = Lib.playlists.find((p) => p.id === this.plId);
@@ -1021,10 +1035,16 @@ const UI = {
     if (Player.repeat === 'all') for (let i = 0; i < Player.qi; i++) { const t = Lib.tracks.get(Player.queue[i]); if (t) up.push([i, t]); }
     this.openSheet(`
       ${cur ? `<h3>Now Playing</h3><div class="sheet-head queue-now">${this.artHTML(cur)}<span class="row-text"><span class="t1">${esc(cur.title)}</span><span class="t2">${esc(cur.artist)}</span></span></div>` : ''}
-      <h3>Up Next</h3>
-      <div class="automix-row"><span><strong>AutoMix</strong><small>Blend each song into the next, like a DJ</small></span><label class="switch"><input type="checkbox" id="q-automix" ${settings.autoMix && settings.crossfade ? 'checked' : ''}><i></i></label></div>
+      <div class="q-head"><h3>Up Next</h3><span class="q-sub">${settings.autoMix && settings.crossfade ? 'Songs blend into each other' : 'Songs play back to back'}</span></div>
+      <div class="q-toggles">
+        <button class="q-tog" id="q-shuffle" aria-pressed="${Player.shuffle}" aria-label="Shuffle">${icon('shuffle')}</button>
+        <button class="q-tog" id="q-repeat" aria-pressed="${Player.repeat !== 'off'}" aria-label="Repeat">${icon('repeat')}<b ${Player.repeat === 'one' ? '' : 'hidden'}>1</b></button>
+        <button class="q-tog wide" id="q-automix" aria-pressed="${!!(settings.autoMix && settings.crossfade)}">${icon('inf')}AutoMix</button>
+      </div>
       ${up.length ? `<div class="rows">${up.map(([i, t]) => `<div class="row" data-qi="${i}"><button class="row-main" data-q="jump">${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}${t.bpm ? ' · ' + Math.round(t.bpm) + ' BPM' : ''}</span></span></button><span class="row-meta"><button class="icon-btn" data-q="rm" aria-label="Remove">${icon('trash')}</button></span></div>`).join('')}</div>` : '<p class="count-note">Nothing queued</p>'}`, (b) => {
-      $('#q-automix', b).addEventListener('change', (e) => setAutoMix(e.target.checked));
+      $('#q-shuffle', b).onclick = () => { Player.setShuffle(!Player.shuffle); this.queueSheet(); };
+      $('#q-repeat', b).onclick = () => Player.cycleRepeat();
+      $('#q-automix', b).onclick = () => { setAutoMix(!(settings.autoMix && settings.crossfade > 0)); this.queueSheet(); };
       b.addEventListener('click', (e) => {
         const r = e.target.closest('[data-qi]'); const a = e.target.closest('[data-q]')?.dataset.q; if (!r || !a) return;
         const i = +r.dataset.qi;
@@ -1038,7 +1058,7 @@ const UI = {
       <div class="setting"><div class="setting-row"><strong>Auto-Mix</strong><label class="switch"><input type="checkbox" id="s-auto" ${settings.autoMix ? 'checked' : ''}><i></i></label></div>
         <small>Blends the next song in before the current one ends, like a DJ.</small></div>
       <div class="setting"><div class="setting-row"><strong>Crossfade length</strong><output id="s-xf-out">${settings.crossfade}s</output></div>
-        <input type="range" id="s-xf" min="0" max="12" step="1" value="${settings.crossfade}" aria-label="Crossfade length"></div>
+        <input type="range" id="s-xf" min="0" max="20" step="1" value="${settings.crossfade}" aria-label="Crossfade length"></div>
       <div class="setting"><div class="setting-row"><strong>Smart Mix</strong><label class="switch"><input type="checkbox" id="s-smart" ${settings.smartMix ? 'checked' : ''}><i></i></label></div>
         <small>Matches tempo (BPM), lines up the beats, and swaps the bass halfway through.</small></div>
       <div class="setting"><div class="setting-row"><strong>Key Lock</strong><label class="switch"><input type="checkbox" id="s-key" ${settings.keyLock ? 'checked' : ''}><i></i></label></div>
@@ -1050,7 +1070,7 @@ const UI = {
         <button data-s="wipe" class="danger">${icon('trash')}Delete Entire Library</button></div>
         <small id="s-usage"></small></div>`}`, (b) => {
       const xf = $('#s-xf', b);
-      const paint = () => xf.style.setProperty('--p', (xf.value / 12 * 100) + '%');
+      const paint = () => xf.style.setProperty('--p', (xf.value / 20 * 100) + '%');
       paint();
       xf.addEventListener('input', () => { settings.crossfade = +xf.value; $('#s-xf-out', b).textContent = xf.value + 's'; paint(); saveSettings(); this.transport(); });
       $('#s-auto', b).addEventListener('change', (e) => { settings.autoMix = e.target.checked; saveSettings(); this.transport(); });
@@ -1081,9 +1101,18 @@ const UI = {
   },
 };
 
+async function toggleFav(id) {
+  const t = Lib.tracks.get(id); if (!t) return;
+  t.fav = !t.fav;
+  await DB.put('tracks', t);
+  UI.transport();
+  if (UI.tab === 'playlists') UI.plId ? UI.renderPlaylist() : UI.renderPlaylists();
+  toast(t.fav ? 'Added to Favorites' : 'Removed from Favorites', 1400);
+}
+
 function setAutoMix(on) {
   settings.autoMix = on;
-  if (on && !settings.crossfade) settings.crossfade = 6;
+  if (on && !settings.crossfade) settings.crossfade = 10;
   saveSettings(); UI.transport();
   toast(on ? 'AutoMix on: songs will blend into each other' : 'AutoMix off', 1800);
 }
@@ -1309,8 +1338,7 @@ function bind() {
   $('#np-play').onclick = () => Player.toggle();
   $('#np-next').onclick = () => Player.next(true);
   $('#np-prev').onclick = () => Player.prev();
-  $('#np-shuffle').onclick = () => Player.setShuffle(!Player.shuffle);
-  $('#np-repeat').onclick = () => Player.cycleRepeat();
+  $('#np-fav').onclick = () => { if (Player.current) toggleFav(Player.current.id); };
   $('#np-queue-btn').onclick = () => UI.queueSheet();
   $('#np-xf-btn').onclick = () => setAutoMix(!(settings.autoMix && settings.crossfade > 0));
   $('#np-more').onclick = () => { if (Player.current) UI.trackMenu(Player.current.id); };

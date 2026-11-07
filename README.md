@@ -15,7 +15,7 @@ A phone-first music player in the style of modern music apps, with **AutoMix**: 
 - Built into playback like Apple Music: as a song ends, the next one blends in automatically. There is no separate mixer screen.
 - Turn it on or off with the **AutoMix** button in Now Playing or the switch at the top of **Up Next**
 - Behind the scenes it detects each song's tempo (BPM), matches speeds, lines up the beats, and swaps the bass halfway through the blend
-- Blend length (0–12 s), smart beat-matching and key lock are in **Settings** (the gear icon in Library)
+- Blend length (0–20 s, default 10 s), smart beat-matching and key lock are in **Settings** (the gear icon in Library)
 - Built-in demo tracks (122, 124 and 126 BPM) let you hear it without your own files
 
 ## Using it on your phone
