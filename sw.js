@@ -1,5 +1,5 @@
 // Offline support: cache the app shell; music itself lives in IndexedDB.
-const CACHE = 'mashup-v5';
+const CACHE = 'mashup-v6';
 const SHELL = ['./', 'index.html', 'css/style.css', 'js/app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png', 'js/vendor/blob-upload.js'];
 
 self.addEventListener('install', (e) => {
