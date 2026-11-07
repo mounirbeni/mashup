@@ -759,7 +759,7 @@ const Engine = {
     return this.anim.from + (this.anim.to - this.anim.from) * k;
   },
   /* schedule an equal-power crossfade in the audio thread (keeps working in the background) */
-  fadeTo(to, dur, onDone, when) {
+  fadeTo(to, dur, onDone, when, separated = false) {
     const ctx = this.ensure();
     if (this.anim) { clearTimeout(this.anim.timer); this.anim = null; }
     const from = this.x, now = Math.max(ctx.currentTime + 0.02, when || 0), steps = 24;
@@ -769,7 +769,13 @@ const Engine = {
       p.setValueAtTime(this.gains(from)[idx], now);
       for (let i = 1; i <= steps; i++) {
         const xi = from + (to - from) * (i / steps);
-        p.linearRampToValueAtTime(this.gains(xi)[idx], now + dur * (i / steps));
+        const k = i / steps;
+        // Incompatible rhythms must not play together: fade out, then fade in.
+        const g = separated
+          ? (idx === to ? Math.sin(Math.max(0, (k - 0.5) * 2) * Math.PI / 2)
+            : Math.cos(Math.min(1, k * 2) * Math.PI / 2))
+          : this.gains(xi)[idx];
+        p.linearRampToValueAtTime(g, now + dur * k);
       }
     }
     this.anim = { from, to, t0: now, dur, timer: setTimeout(() => { this.anim = null; this.x = to; onDone && onDone(); }, (now - ctx.currentTime + dur) * 1000 + 60) };
@@ -936,9 +942,15 @@ const Player = {
     when = Math.max(when || 0, ctx.currentTime + 0.02);
     this.mixing = this.mixing || { from, to, i: this.qi };
     const smart = settings.smartMix;
-    const sync = smart && from.track?.bpm && to.track?.bpm;
-    let ratio = 1;
-    if (sync) { const r = (from.track.bpm * from.rate) / to.track.bpm; if (Math.abs(r - 1) <= 0.06) ratio = r; }
+    // Freeze any post-mix tempo recovery before calculating the next beat grid.
+    from.stopGlide(); to.stopGlide();
+    const r = (from.track?.bpm * from.rate) / to.track?.bpm;
+    const sync = smart && Number.isFinite(r) && r > 0 && Math.abs(r - 1) <= 0.06;
+    const separated = smart && !sync;
+    const ratio = sync ? r : 1;
+    if (separated) dur = Math.min(dur, 0.8);
+    const remaining = (from.duration - from.time) / from.rate - (when - ctx.currentTime);
+    dur = Math.max(0.02, Math.min(dur, remaining - 0.02));
     to.pause();
     to.setRate(ratio);
     let start = this.entryPoint(to);
@@ -949,7 +961,7 @@ const Player = {
     }
     to.seek(Math.min(start, Math.max(0, to.duration - dur * to.rate - 1)));
     to.play(when);
-    if (smart) {
+    if (sync) {
       // bass swap halfway through, and the outgoing song is gently filtered as it leaves
       const mid = when + dur * 0.5;
       const lowIn = to.low.gain, lowOut = from.low.gain;
@@ -969,7 +981,7 @@ const Player = {
       this.mixing = null;
       if (Math.abs(to.rate - 1) > 0.002) to.glideRate(1, 16);
       UI.mixState(false); UI.deckState();
-    }, when);
+    }, when, separated);
   },
   cancelMix() { if (this.mixing) Engine.cancelAnim(); },
   mixAborted() {
