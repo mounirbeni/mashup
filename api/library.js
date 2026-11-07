@@ -63,7 +63,7 @@ export async function POST(req) {
     } else if (op === 'deleteTrack') {
       const t = lib.tracks.find((x) => x.id === body.id);
       if (t) {
-        await del([t.audio, t.art].filter(Boolean)).catch(() => {});
+        await del([t.audio, t.art, `lyrics/${t.id}.json`].filter(Boolean)).catch(() => {});
         lib.tracks = lib.tracks.filter((x) => x.id !== t.id);
         lib.playlists.forEach((p) => { p.trackIds = p.trackIds.filter((id) => id !== t.id); });
       }

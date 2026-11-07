@@ -9,7 +9,8 @@ A phone-first music player in the style of modern music apps, with **AutoMix**: 
 - Now Playing screen tinted from the album art, plus an audio-reactive visualizer
 - Shuffle, repeat (all / one), and an Up Next queue with "Play Next"
 - Lock-screen and headphone controls (Media Session)
-- Reads MP3 tags (ID3): title, artist, album and cover art, including Arabic text stored as Windows-1256
+- Reads tags from MP3 (ID3) and M4A files: title, artist, album, tempo, cover art and embedded lyrics, including Arabic text stored as Windows-1256
+- **Lyrics:** time-synced lines light up and scroll with the song (tap a line to jump there); plain lyrics show as text. Found in the song file or on [LRCLIB](https://lrclib.net), or pasted in by hand, and saved privately with the song
 
 **AutoMix**
 - Built into playback like Apple Music: as a song ends, the next one blends in automatically. There is no separate mixer screen.
@@ -40,6 +41,7 @@ A phone-first music player in the style of modern music apps, with **AutoMix**: 
 | `POST /api/library` | Applies one change: `addTrack`, `updateTrack`, `deleteTrack`, `savePlaylist`, `deletePlaylist`, `wipe` |
 | `POST /api/upload` | Issues a short-lived token so the browser uploads a file straight to Blob storage |
 | `GET /api/file?p=…` | Streams a song or cover, with `Range` support for seeking |
+| `GET/POST/DELETE /api/lyrics?id=…` | Lyrics for a song: looks them up once (LRCLIB, matching title and artist; slowed / sped-up edits get rescaled timings), saves lyrics pasted by hand or read from the file, or clears them to search again |
 
 ## Deploying
 

@@ -128,6 +128,7 @@ const Tags = (() => {
     const out = {};
     try {
       const head = new Uint8Array(await file.slice(0, 10).arrayBuffer());
+      if (head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70) return await readMp4(file); // "ftyp"
       if (!(head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33)) return out;
       const ver = head[3], flags = head[5], size = synch(head, 6);
       const b = new Uint8Array(await file.slice(10, 10 + size).arrayBuffer());
@@ -147,6 +148,17 @@ const Tags = (() => {
         else if ((id === 'TPE2' || id === 'TP2') && !out.artist) out.artist = text(f.subarray(1), enc);
         else if (id === 'TALB' || id === 'TAL') out.album = text(f.subarray(1), enc);
         else if (id === 'TBPM' || id === 'TBP') { const v = parseFloat(text(f.subarray(1), enc)); if (v > 40 && v < 250) out.bpm = v; }
+        else if ((id === 'USLT' || id === 'ULT') && !out.lyrics) {
+          const e = termEnd(f, 4, enc); // skip language + description
+          const txt = (enc === 1 || enc === 2) ? f.subarray(e + 2) : f.subarray(e + 1);
+          const dec = enc === 0 ? dLatin : enc === 3 ? d8 : enc === 2 ? d16be : (txt[0] === 0xfe ? d16be : d16le);
+          out.lyrics = dec.decode(txt).replace(/^\uFEFF/, '').replace(/\u0000+$/, '').trim() || undefined;
+        }
+        else if ((id === 'TXXX' || id === 'TXX') && !out.lyrics) {
+          // some taggers keep lyrics in a custom text field ("LYRICS", "UNSYNCEDLYRICS", …)
+          const e = termEnd(f, 1, enc);
+          if (/lyric|uslt/i.test(text(f.subarray(1, e), enc))) out.lyrics = text(f.subarray(e + (enc === 1 || enc === 2 ? 2 : 1)), enc) || undefined;
+        }
         else if ((id === 'APIC' || id === 'PIC') && !out.art) {
           let q = 1, mime;
           if (id === 'PIC') { const fmt3 = String.fromCharCode(f[1], f[2], f[3]).toLowerCase(); mime = fmt3 === 'png' ? 'image/png' : 'image/jpeg'; q = 4; }
@@ -159,6 +171,52 @@ const Tags = (() => {
       }
     } catch (e) { console.warn('tag read failed', e); }
     return out;
+  }
+  /* M4A / MP4: walk moov → udta → meta → ilst for title, artist, album, tempo, lyrics and cover */
+  async function readMp4(file) {
+    const out = {};
+    let pos = 0;
+    while (pos + 8 <= file.size) {
+      const h = new DataView(await file.slice(pos, pos + 16).arrayBuffer());
+      let len = h.getUint32(0), hdr = 8;
+      const type = String.fromCharCode(h.getUint8(4), h.getUint8(5), h.getUint8(6), h.getUint8(7));
+      if (len === 1) { len = Number(h.getBigUint64(8)); hdr = 16; } else if (len === 0) len = file.size - pos;
+      if (len < 8) break;
+      if (type === 'moov') {
+        if (len > 64 * 1024 * 1024) break;
+        const b = new Uint8Array(await file.slice(pos + hdr, pos + len).arrayBuffer());
+        walk(b, 0, b.length, false, out);
+        break;
+      }
+      pos += len;
+    }
+    return out;
+  }
+  function walk(b, start, end, inIlst, out) {
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    let p = start;
+    while (p + 8 <= end) {
+      const len = dv.getUint32(p);
+      if (len < 8 || p + len > end) break;
+      const type = String.fromCharCode(b[p + 4], b[p + 5], b[p + 6], b[p + 7]);
+      const cs = p + 8, ce = p + len;
+      if (type === 'udta') walk(b, cs, ce, false, out);
+      else if (type === 'meta') walk(b, cs + 4, ce, false, out); // meta has 4 bytes of version/flags
+      else if (type === 'ilst') walk(b, cs, ce, true, out);
+      else if (inIlst && ce - cs > 16 && String.fromCharCode(b[cs + 4], b[cs + 5], b[cs + 6], b[cs + 7]) === 'data') {
+        const dlen = Math.min(dv.getUint32(cs), ce - cs), kind = dv.getUint32(cs + 8) & 0xffffff;
+        const data = b.subarray(cs + 16, cs + dlen);
+        const txt = () => d8.decode(data).trim();
+        if (type === '\u00a9nam') out.title = txt();
+        else if (type === '\u00a9ART') out.artist = txt();
+        else if (type === 'aART' && !out.artist) out.artist = txt();
+        else if (type === '\u00a9alb') out.album = txt();
+        else if (type === '\u00a9lyr') out.lyrics = txt();
+        else if (type === 'tmpo' && data.length >= 2) { const v = (data[0] << 8) | data[1]; if (v > 40 && v < 250) out.bpm = v; }
+        else if (type === 'covr' && !out.art) out.art = new Blob([data.slice()], { type: kind === 14 ? 'image/png' : 'image/jpeg' });
+      }
+      p = ce;
+    }
   }
   return { read };
 })();
@@ -362,11 +420,14 @@ async function addFiles(files) {
     let a = null;
     try { toast(`Analyzing ${i} of ${files.length}…`, 0); a = await Analysis.run(f); } catch (e) { console.warn('analysis failed', e); }
     try {
+      const id = uid();
       await uploadTrack({
-        id: uid(), fileName: f.name, title, artist: artist || 'Unknown Artist', album: tags.album || '',
+        id, fileName: f.name, title, artist: artist || 'Unknown Artist', album: tags.album || '',
         duration: dur || a?.duration || 0, bpm: tags.bpm || a?.bpm || null, beatOffset: a?.beatOffset ?? null,
         analyzed: !!a, addedAt: Date.now(),
       }, f, tags.art, label);
+      // lyrics stored inside the file are kept, so they show without a search
+      if (tags.lyrics) await Api.call('/api/lyrics?id=' + id, { method: 'POST', body: JSON.stringify({ text: tags.lyrics, source: 'file' }) }).catch(() => {});
       ok++;
       UI.render();
     } catch (e) {
@@ -1107,7 +1168,7 @@ const UI = {
     $('#np-title').textContent = t.title; $('#np-artist').textContent = t.artist + (t.album ? ' — ' + t.album : '');
     $('#mini-art').outerHTML = this.artHTML(t).replace('class="art sm"', 'class="art sm" id="mini-art"');
     $('#np-art').outerHTML = this.artHTML(t, 'xl').replace('class="art xl"', 'class="art xl" id="np-art"');
-    $('#np-art').hidden = !$('#np-viz').hidden;
+    this.setNpMode(this.npMode || 'art');
     this.hydrateArt($('#mini')); this.hydrateArt($('#np'));
     this.transport();
     const url = await Lib.artUrl(t.id);
@@ -1163,6 +1224,18 @@ const UI = {
     document.documentElement.style.background = c;
     document.body.style.background = c;
   },
+  /* what fills the Now Playing stage: the cover, the visualizer, or the lyrics */
+  setNpMode(mode) {
+    this.npMode = mode;
+    $('#np-art').hidden = mode !== 'art';
+    $('#np-viz').hidden = mode !== 'viz';
+    $('#np-lyrics').hidden = mode !== 'lyrics';
+    $('#np').classList.toggle('lyrics-mode', mode === 'lyrics');
+    $('#np-viz-btn').setAttribute('aria-pressed', mode === 'viz');
+    $('#np-lyr-btn').setAttribute('aria-pressed', mode === 'lyrics');
+    if (mode === 'lyrics') Lyrics.show(Player.current);
+    store.set('npMode', mode);
+  },
   openNP() { $('#np').classList.add('open'); $('#np').setAttribute('aria-hidden', 'false'); this.paintEdges(true); },
   closeNP() {
     const np = $('#np'); np.classList.remove('open'); np.style.transform = ''; np.setAttribute('aria-hidden', 'true');
@@ -1191,6 +1264,7 @@ const UI = {
       <div class="menu">
         <button data-m="next">${icon('queue')}Play Next</button>
         <button data-m="queue">${icon('list')}Add to Queue</button>
+        <button data-m="lyrics">${icon('lyrics')}Lyrics…</button>
         <button data-m="fav">${icon(t.fav ? 'star-fill' : 'star')}${t.fav ? 'Remove from Favorites' : 'Add to Favorites'}</button>
         <button data-m="pl">${icon('plus')}Add to Playlist…</button>
         ${inPl ? `<button data-m="unpl">${icon('trash')}Remove from this Playlist</button>` : ''}
@@ -1201,6 +1275,7 @@ const UI = {
         if (m === 'next') { this.closeSheet(); Player.playNext(id); }
         if (m === 'queue') { this.closeSheet(); Player.addToQueue(id); }
         if (m === 'fav') { this.closeSheet(); toggleFav(id); }
+        if (m === 'lyrics') { this.closeSheet(); Lyrics.editor(t); }
         if (m === 'pl') this.pickPlaylist(id);
         if (m === 'unpl') {
           const pl = Lib.playlists.find((p) => p.id === this.plId);
@@ -1515,6 +1590,7 @@ function frame() {
     }
   }
   if (!$('#np-viz').hidden && $('#np').classList.contains('open')) drawViz();
+  if (UI.npMode === 'lyrics' && $('#np').classList.contains('open') && Player.current) Lyrics.sync(Player.live.time);
   requestAnimationFrame(frame);
 }
 /* Now Playing visualizer: mirrored, log-spaced spectrum ring with auto-levelling per band,
@@ -1683,6 +1759,126 @@ function drawViz() {
 }
 
 /* =========================================================================
+ * Lyrics — time-synced lines that light up and scroll with the song (tap a line to jump),
+ * or plain text when only unsynced lyrics exist.
+ * ========================================================================= */
+const Lyrics = {
+  cache: new Map(), shownId: null, lines: null, active: -2, userScrollUntil: 0,
+  parse(data) {
+    if (!data || data.none) return null;
+    if (data.lrc) {
+      const out = [], scale = data.scale || 1;
+      let offset = 0;
+      for (const raw of data.lrc.split('\n')) {
+        const om = raw.match(/^\s*\[offset:\s*([+-]?\d+)\]/i);
+        if (om) { offset = +om[1] / 1000; continue; }
+        const stamps = [...raw.matchAll(/\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
+        if (!stamps.length) continue;
+        const text = raw.replace(/\[[^\]]*\]/g, '').trim();
+        for (const m of stamps) {
+          const t = (+m[1] * 60 + +m[2] + (m[3] ? +m[3] / Math.pow(10, m[3].length) : 0) - offset) * scale;
+          out.push({ t: Math.max(0, t), text });
+        }
+      }
+      out.sort((a, b) => a.t - b.t);
+      if (out.length) return { synced: true, lines: out };
+    }
+    if (data.plain) return { synced: false, lines: data.plain.split('\n').map((text) => ({ t: null, text: text.trim() })) };
+    return null;
+  },
+  async get(track, fresh) {
+    if (!fresh && this.cache.has(track.id)) return this.cache.get(track.id);
+    if (fresh) await Api.call('/api/lyrics?id=' + encodeURIComponent(track.id), { method: 'DELETE' }).catch(() => {});
+    const p = Api.call('/api/lyrics?id=' + encodeURIComponent(track.id)).catch((e) => ({ none: true, error: e.message === 'unauthorized' ? '' : 'Couldn’t load lyrics. Check your connection.' }));
+    this.cache.set(track.id, p);
+    const data = await p;
+    if (data.error) this.cache.delete(track.id); // try again next time
+    return data;
+  },
+  async show(track, fresh) {
+    const box = $('#np-lyrics');
+    if (!track) { box.innerHTML = ''; this.shownId = null; return; }
+    if (this.shownId === track.id && !fresh) return;
+    this.shownId = track.id; this.lines = null; this.active = -2;
+    box.innerHTML = `<div class="lyr-msg"><span class="lyr-dots"><i></i><i></i><i></i></span></div>`;
+    const data = await this.get(track, fresh);
+    if (this.shownId !== track.id) return; // song changed meanwhile
+    const parsed = this.parse(data);
+    if (!parsed) {
+      box.innerHTML = `<div class="lyr-msg"><p>${esc(data.error || 'No lyrics found for this song.')}</p>
+        <button class="lyr-add" data-lyr="edit">${data.error ? 'Try Again' : 'Add Lyrics'}</button></div>`;
+      if (data.error) box.querySelector('[data-lyr]').dataset.lyr = 'retry';
+      return;
+    }
+    this.lines = parsed;
+    const credit = data.source === 'lrclib' ? 'Lyrics from LRCLIB' : data.source === 'file' ? 'Lyrics from the song file' : 'Lyrics added by you';
+    box.innerHTML = `<div class="lyr-pad"></div>${parsed.lines.map((l, i) => l.text
+      ? `<p class="lyr-line" dir="auto" data-i="${i}"${parsed.synced ? ` data-t="${l.t.toFixed(2)}"` : ''}>${esc(l.text)}</p>`
+      : parsed.synced ? `<p class="lyr-line lyr-gap" data-i="${i}" data-t="${l.t.toFixed(2)}"><span class="lyr-dots"><i></i><i></i><i></i></span></p>` : `<p class="lyr-line" data-i="${i}"></p>`).join('')}
+      <p class="lyr-credit">${parsed.synced ? '' : 'These lyrics aren’t time-synced. '}${credit} · <button data-lyr="edit">Edit</button></p><div class="lyr-pad"></div>`;
+    box.classList.toggle('synced', parsed.synced);
+    box.scrollTop = 0;
+  },
+  /* called every frame while lyrics are on screen */
+  sync(time) {
+    const L = this.lines;
+    if (!L || !L.synced) return;
+    const t = time + 0.25; // light the line a moment early, like a singer's breath
+    let lo = 0, hi = L.lines.length - 1, idx = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (L.lines[m].t <= t) { idx = m; lo = m + 1; } else hi = m - 1; }
+    if (idx === this.active) return;
+    this.active = idx;
+    const box = $('#np-lyrics');
+    $$('.lyr-line', box).forEach((p) => { const i = +p.dataset.i; p.classList.toggle('on', i === idx); p.classList.toggle('past', i < idx); });
+    const el = box.querySelector(`.lyr-line[data-i="${idx}"]`);
+    if (el && performance.now() > this.userScrollUntil) {
+      box.scrollTo({ top: el.offsetTop - box.clientHeight * 0.3, behavior: Viz.reduce.matches ? 'auto' : 'smooth' });
+    }
+  },
+  editor(track) {
+    const cached = this.cache.get(track.id);
+    Promise.resolve(cached || this.get(track)).then((data) => {
+      const text = data?.lrc || data?.plain || '';
+      UI.openSheet(`<h3>Lyrics · ${esc(track.title)}</h3>
+        <form id="lyr-form">
+          <textarea class="text-input lyr-text" id="lyr-text" dir="auto" rows="12" placeholder="Paste the lyrics here">${esc(text)}</textarea>
+          <small class="lyr-hint">To sync lines with the music, start each line with its time, like <b>[01:23.45]</b>. Lines without times show as plain lyrics.</small>
+          <div class="sheet-actions">
+            <button type="button" class="ghost-btn" data-lyr-search>Search Again</button>
+            <button class="primary-btn" type="submit">Save</button>
+          </div>
+        </form>`, (b) => {
+        $('[data-lyr-search]', b).onclick = async () => { UI.closeSheet(); toast('Searching for lyrics…', 1500); await this.show(track, true); };
+        $('#lyr-form', b).addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const data2 = await Api.call('/api/lyrics?id=' + encodeURIComponent(track.id), { method: 'POST', body: JSON.stringify({ text: $('#lyr-text', b).value }) });
+            this.cache.set(track.id, Promise.resolve(data2));
+            UI.closeSheet(); toast('Lyrics saved', 1400);
+            if (this.shownId === track.id || UI.npMode === 'lyrics') { this.shownId = null; this.show(track); }
+          } catch { toast('Couldn’t save the lyrics. Check your connection.'); }
+        });
+      });
+    });
+  },
+  bind() {
+    const box = $('#np-lyrics');
+    box.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-lyr]')?.dataset.lyr;
+      const t = Player.current;
+      if (act === 'edit' && t) return this.editor(t);
+      if (act === 'retry' && t) { this.cache.delete(t.id); this.shownId = null; return this.show(t); }
+      const line = e.target.closest('.lyr-line[data-t]');
+      if (line) { Player.live.seek(+line.dataset.t); this.userScrollUntil = 0; this.active = -2; }
+    });
+    // let the reader scroll freely for a few seconds before following the song again
+    const hold = () => { this.userScrollUntil = performance.now() + 4000; };
+    box.addEventListener('touchmove', hold, { passive: true });
+    box.addEventListener('wheel', hold, { passive: true });
+  },
+};
+
+/* =========================================================================
  * Theme
  * ========================================================================= */
 function applyTheme() {
@@ -1744,10 +1940,10 @@ function bind() {
   $('#np-queue-btn').onclick = () => UI.queueSheet();
   $('#np-xf-btn').onclick = () => setAutoMix(!(settings.autoMix && settings.crossfade > 0));
   $('#np-more').onclick = () => { if (Player.current) UI.trackMenu(Player.current.id); };
-  $('#np-viz-btn').onclick = (e) => {
-    const on = $('#np-viz').hidden; $('#np-viz').hidden = !on; $('#np-art').hidden = on;
-    e.currentTarget.setAttribute('aria-pressed', on);
-  };
+  $('#np-viz-btn').onclick = () => UI.setNpMode(UI.npMode === 'viz' ? 'art' : 'viz');
+  $('#np-lyr-btn').onclick = () => UI.setNpMode(UI.npMode === 'lyrics' ? 'art' : 'lyrics');
+  UI.npMode = ['art', 'viz', 'lyrics'].includes(store.get('npMode', 'art')) ? store.get('npMode', 'art') : 'art';
+  Lyrics.bind();
   const seek = $('#np-seek');
   seek.addEventListener('input', () => {
     UI.seeking = true; seek.style.setProperty('--p', (seek.value / 10) + '%');
@@ -1762,7 +1958,7 @@ function bind() {
   let sy = null;
   const np = $('#np');
   np.addEventListener('touchstart', (e) => {
-    if (e.target.closest('input,canvas')) return;
+    if (e.target.closest('input,canvas,.np-lyrics')) return;
     sy = e.touches[0].clientY;
   }, { passive: true });
   np.addEventListener('touchmove', (e) => {
@@ -1809,7 +2005,7 @@ async function boot() {
   if ('serviceWorker' in navigator && /^https:|^http:\/\/localhost/.test(location.href) && !window.__NO_SW__) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  window.__mazj = { Engine, Player, Lib, UI, settings, Local }; // for debugging
+  window.__mazj = { Engine, Player, Lib, UI, settings, Local, Tags, Lyrics }; // for debugging
   const open = async () => {
     toast('Loading your library…', 0);
     try { await Lib.load(); $('#toast').hidden = true; }
