@@ -99,38 +99,11 @@
         <p class="pl-meta" id="pl-meta"></p>
         <div class="lib-tools center">
           <button class="pill-btn" id="pl-play"><svg><use href="#i-play"/></svg>Play</button>
-          <button class="pill-btn" id="pl-mix"><svg><use href="#i-mixer"/></svg>Auto-Mix</button>
+          <button class="pill-btn" id="pl-shuffle"><svg><use href="#i-shuffle"/></svg>Shuffle</button>
         </div>
       </div>
       <div id="pl-tracks"></div>
       <button class="ghost-btn wide" id="pl-add-songs"><svg><use href="#i-plus"/></svg>Add Songs</button>
-    </section>
-
-    <!-- ===== Mixer ===== -->
-    <section class="view" id="view-mixer" data-view="mixer" hidden>
-      <header class="view-head">
-        <h1 class="big-title">Mixer</h1>
-        <div class="head-actions">
-          <button class="chip-toggle" id="mx-automix" aria-pressed="true"><svg><use href="#i-wave"/></svg>Auto-Mix</button>
-        </div>
-      </header>
-      <div class="mixer" dir="ltr">
-        <div class="decks">
-          <div class="deck" id="deck-A" data-deck="A"></div>
-          <div class="deck" id="deck-B" data-deck="B"></div>
-        </div>
-        <div class="xfader-wrap">
-          <div class="xf-labels"><span>A</span><button class="mini-chip" id="xf-center">Center</button><span>B</span></div>
-          <input type="range" class="xfader" id="xfader" min="0" max="1000" value="0" aria-label="Crossfader">
-          <div class="xf-actions">
-            <button class="action-chip" id="mx-mix-now"><svg><use href="#i-sync"/></svg>Mix to the Other Deck Now</button>
-          </div>
-        </div>
-        <div class="master">
-          <canvas id="mx-scope" height="56" aria-hidden="true"></canvas>
-          <p class="hint" id="mx-hint">Load a song onto each deck from the “⋯” menu or by tapping the deck title. Move the crossfader to mix by hand, or turn on Auto-Mix to blend songs automatically as each one ends.</p>
-        </div>
-      </div>
     </section>
 
     <!-- ===== Search ===== -->
@@ -162,7 +135,6 @@
   <nav class="tabbar" id="tabbar">
     <button data-tab="library" aria-current="page"><svg><use href="#i-library"/></svg><span>Library</span></button>
     <button data-tab="playlists"><svg><use href="#i-list"/></svg><span>Playlists</span></button>
-    <button data-tab="mixer"><svg><use href="#i-mixer"/></svg><span>Mixer</span></button>
     <button data-tab="search"><svg><use href="#i-search"/></svg><span>Search</span></button>
   </nav>
 
@@ -200,7 +172,7 @@
       </div>
       <div class="np-bottom">
         <button class="np-tool" id="np-viz-btn" aria-pressed="false"><svg><use href="#i-wave"/></svg><span>Visualizer</span></button>
-        <button class="np-tool" id="np-xf-btn"><svg><use href="#i-mixer"/></svg><span id="np-xf-label">Mix 6s</span></button>
+        <button class="np-tool" id="np-xf-btn" aria-pressed="true" aria-label="AutoMix"><svg><use href="#i-mixer"/></svg><span>AutoMix</span></button>
         <button class="np-tool" id="np-queue-btn"><svg><use href="#i-queue"/></svg><span>Up Next</span></button>
       </div>
     </div>

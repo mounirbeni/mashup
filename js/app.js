@@ -685,16 +685,6 @@ const Player = {
     this.live = Engine.x < 0.5 ? Engine.decks.A : Engine.decks.B;
     UI.mixState(false); UI.nowPlaying();
   },
-  /* manual crossfader drag: live deck follows the fader */
-  followFader() {
-    const d = Engine.x < 0.5 ? Engine.decks.A : Engine.decks.B;
-    if (d !== this.live && d.track) {
-      this.live = d;
-      const qi = this.queue.indexOf(d.track.id);
-      if (qi >= 0) this.qi = qi;
-      UI.nowPlaying();
-    }
-  },
   onDeckEnded(deck) {
     if (deck !== this.live || this.mixing) return;
     if (this.repeat === 'one') { deck.seek(0); deck.play(); return; }
@@ -789,7 +779,7 @@ const UI = {
   renderPlaylists() {
     const c = $('#pl-content');
     if (!Lib.playlists.length) {
-      c.innerHTML = `<div class="empty"><div class="empty-art">${icon('list')}</div><h2>No playlists yet</h2><p>Create a playlist and let the mixer blend its songs back to back.</p><button class="primary-btn" data-act="new-pl">${icon('plus')}New Playlist</button></div>`;
+      c.innerHTML = `<div class="empty"><div class="empty-art">${icon('list')}</div><h2>No playlists yet</h2><p>Create a playlist and AutoMix will blend its songs back to back.</p><button class="primary-btn" data-act="new-pl">${icon('plus')}New Playlist</button></div>`;
       return;
     }
     c.innerHTML = `<div class="grid">${Lib.playlists.map((pl) => `<button class="tile" data-act="open-pl" data-pl="${esc(pl.id)}">${this.coverHTML(pl)}<span class="t1">${esc(pl.name)}</span><span class="t2">${songsLabel(pl.trackIds.length)}</span></button>`).join('')}</div>`;
@@ -835,7 +825,6 @@ const UI = {
     else this.showView(tab);
     if (tab === 'library') this.renderLibrary();
     if (tab === 'search') { this.renderSearch(); }
-    if (tab === 'mixer') this.renderDecks();
     store.set('tab', tab);
   },
   trackUpdated(id) {
@@ -843,7 +832,6 @@ const UI = {
       const t = Lib.tracks.get(id);
       if (t?.bpm && !m.querySelector('.bpm-tag')) m.insertAdjacentHTML('afterbegin', `<span class="bpm-tag">${Math.round(t.bpm)} BPM</span>`);
     });
-    for (const d of Object.values(Engine.decks)) if (d.track?.id === id) { this.drawWave(d); this.deckRate(d); }
   },
   markPlaying() {
     const id = Player.current?.id;
@@ -903,8 +891,7 @@ const UI = {
     $('#np-shuffle').setAttribute('aria-pressed', Player.shuffle);
     $('#np-repeat').setAttribute('aria-pressed', Player.repeat !== 'off');
     $('#np-rep1').hidden = Player.repeat !== 'one';
-    $('#np-xf-label').textContent = settings.crossfade > 0 && settings.autoMix ? `Mix ${settings.crossfade}s` : 'Mix off';
-    $('#mx-automix').setAttribute('aria-pressed', settings.autoMix);
+    $('#np-xf-btn').setAttribute('aria-pressed', settings.autoMix && settings.crossfade > 0);
     this.markPlaying();
   },
   mixState(on) {
@@ -914,122 +901,11 @@ const UI = {
   openNP() { $('#np').classList.add('open'); $('#np').setAttribute('aria-hidden', 'false'); },
   closeNP() { const np = $('#np'); np.classList.remove('open'); np.style.transform = ''; np.setAttribute('aria-hidden', 'true'); },
 
-  /* ---------- decks ---------- */
-  renderDecks() { for (const d of Object.values(Engine.decks)) this.deckLoaded(d); this.deckState(); },
-  deckHTML(d) {
-    const t = d.track;
-    const knob = (k, label) => `<div class="knob" data-knob="${k}"><div class="knob-dial" tabindex="0" role="slider" aria-label="${label}"></div><span>${label}</span></div>`;
-    return `<div class="deck-top"><span class="deck-letter">${d.id}</span>
-        <button class="deck-load" data-dact="load"><span class="t1">${t ? esc(t.title) : 'Choose a song'}</span><span class="t2">${t ? esc(t.artist) : 'Tap to load'}</span></button></div>
-      <div class="deck-wave" data-dact="wave"><canvas></canvas><i class="ph"></i></div>
-      <div class="deck-stats"><span data-s="time">0:00</span><b data-s="bpm">— BPM</b><span data-s="rem">-0:00</span></div>
-      <div class="deck-transport">
-        <button class="dk-btn" data-dact="cue">CUE</button>
-        <button class="dk-btn play" data-dact="play" aria-label="Play">${icon('play')}</button>
-        <button class="dk-btn" data-dact="sync">SYNC</button>
-      </div>
-      <div class="knobs">${knob('high', 'HI')}${knob('mid', 'MID')}${knob('low', 'LOW')}${knob('filter', 'FILTER')}</div>
-      <div class="deck-sliders">
-        <label>TEMPO<input type="range" class="center-range" data-dact="tempo" min="-160" max="160" value="0" aria-label="Tempo"><output data-s="pitch">0.0%</output></label>
-        <label>VOL<input type="range" data-dact="trim" min="0" max="100" value="100" aria-label="Deck volume"><output data-s="trim">100</output></label>
-      </div>`;
-  },
-  deckLoaded(d) {
-    const el = $('#deck-' + d.id);
-    if (!el) return;
-    if (!el.dataset.built) { el.innerHTML = this.deckHTML(d); el.dataset.built = '1'; this.bindKnobs(d, el); }
-    const t = d.track;
-    $('.deck-load .t1', el).textContent = t ? t.title : 'Choose a song';
-    $('.deck-load .t2', el).textContent = t ? t.artist : 'Tap to load';
-    this.drawWave(d); this.deckRate(d); this.syncKnobs(d);
-    $('[data-dact="trim"]', el).value = Math.round(d.trimVal * 100);
-    $('[data-s="trim"]', el).textContent = Math.round(d.trimVal * 100);
-  },
-  deckState() {
-    for (const d of Object.values(Engine.decks)) {
-      const el = $('#deck-' + d.id); if (!el || !el.dataset.built) continue;
-      $('[data-dact="play"] use', el).setAttribute('href', d.playing ? '#i-pause' : '#i-play');
-      el.classList.toggle('live', d === Player.live && !!d.track);
-    }
-    this.transport();
-  },
-  deckRate(d) {
-    const el = $('#deck-' + d.id); if (!el || !el.dataset.built) return;
-    const pct = (d.rate - 1) * 100;
-    $('[data-s="pitch"]', el).textContent = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
-    $('[data-dact="tempo"]', el).value = Math.round(pct * 10);
-    const r = $('[data-dact="tempo"]', el); r.style.setProperty('--p', ((+r.value + 160) / 320 * 100) + '%');
-    $('[data-s="bpm"]', el).textContent = d.bpmNow ? d.bpmNow.toFixed(1) + ' BPM' : '— BPM';
-  },
-  drawWave(d) {
-    const el = $('#deck-' + d.id); if (!el || !el.dataset.built) return;
-    const c = $('canvas', el), w = c.clientWidth, h = c.clientHeight;
-    if (!w) return;
-    const dpr = window.devicePixelRatio || 1;
-    c.width = w * dpr; c.height = h * dpr;
-    const g = c.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
-    const col = getComputedStyle(el).getPropertyValue('--deck').trim() || '#888';
-    const p = d.track?.peaks;
-    if (!d.track) return;
-    if (!p || !p.length) {
-      g.fillStyle = col; g.globalAlpha = 0.35; g.fillRect(0, h / 2 - 1, w, 2);
-      g.globalAlpha = 1; g.font = '11px sans-serif'; g.fillStyle = getComputedStyle(document.body).color; g.textAlign = 'center';
-      g.fillText(p ? '—' : 'Analyzing…', w / 2, h / 2 - 6); return;
-    }
-    g.fillStyle = col;
-    const n = p.length, bw = w / n;
-    for (let i = 0; i < n; i++) { const v = (p[i] / 255) * (h / 2 - 3); g.fillRect(i * bw, h / 2 - v, Math.max(1, bw - 0.3), v * 2 || 1); }
-    // beat grid markers every 16 beats
-    if (d.track.bpm && d.duration) {
-      g.fillStyle = 'rgba(127,127,127,.35)';
-      const per = 60 / d.track.bpm * 16;
-      for (let t = d.track.beatOffset || 0; t < d.duration; t += per) g.fillRect((t / d.duration) * w, 0, 1, h);
-    }
-  },
-  syncKnobs(d) {
-    const el = $('#deck-' + d.id); if (!el) return;
-    $$('.knob', el).forEach((k) => {
-      const key = k.dataset.knob;
-      const v = key === 'filter' ? d.filterVal : d.eq[key];
-      const norm = key === 'filter' ? v : (v >= 0 ? v / EQ_MAX : -v / EQ_MIN);
-      $('.knob-dial', k).style.setProperty('--rot', (norm * 135) + 'deg');
-      $('span', k).textContent = key === 'filter'
-        ? (Math.abs(v) < 0.02 ? 'FILTER' : (v < 0 ? 'LP ' : 'HP ') + Math.round(Math.abs(v) * 100))
-        : (Math.abs(v) < 0.3 ? key.toUpperCase().replace('HIGH', 'HI') : (v > 0 ? '+' : '') + Math.round(v) + 'dB');
-    });
-  },
-  bindKnobs(d, el) {
-    $$('.knob', el).forEach((k) => {
-      const key = k.dataset.knob, dial = $('.knob-dial', k);
-      const get = () => key === 'filter' ? d.filterVal : d.eq[key];
-      const set = (v) => {
-        if (key === 'filter') d.setFilter(clamp(v, -1, 1)); else d.setEq(key, clamp(v, EQ_MIN, EQ_MAX));
-        this.syncKnobs(d);
-      };
-      const range = key === 'filter' ? 2 : EQ_MAX - EQ_MIN;
-      let y0, v0, lastTap = 0;
-      dial.addEventListener('pointerdown', (e) => {
-        e.preventDefault(); Engine.ensure();
-        const now = Date.now();
-        if (now - lastTap < 300) { set(0); lastTap = 0; return; }
-        lastTap = now;
-        y0 = e.clientY; v0 = get(); dial.setPointerCapture(e.pointerId);
-      });
-      dial.addEventListener('pointermove', (e) => {
-        if (y0 == null) return;
-        let v = v0 + (y0 - e.clientY) / 160 * range;
-        if (Math.abs(v) < range * 0.03) v = 0; // detent at centre
-        set(v);
-      });
-      const up = () => { y0 = null; };
-      dial.addEventListener('pointerup', up); dial.addEventListener('pointercancel', up);
-      dial.addEventListener('keydown', (e) => {
-        const step = range / 32;
-        if (e.key === 'ArrowUp' || e.key === 'ArrowRight') { set(get() + step); e.preventDefault(); }
-        if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') { set(get() - step); e.preventDefault(); }
-      });
-    });
-  },
+  /* the two decks run behind the scenes; these keep the player UI in sync */
+  deckState() { this.transport(); },
+  deckLoaded() {},
+  deckRate() {},
+  drawWave() {},
 
   /* ---------- sheets ---------- */
   openSheet(html, mount) {
@@ -1047,8 +923,6 @@ const UI = {
       <div class="menu">
         <button data-m="next">${icon('queue')}Play Next</button>
         <button data-m="queue">${icon('list')}Add to Queue</button>
-        <button data-m="deckA">${icon('mixer')}Load to Deck A<span class="tag" style="background:var(--deck-a)">A</span></button>
-        <button data-m="deckB">${icon('mixer')}Load to Deck B<span class="tag" style="background:var(--deck-b)">B</span></button>
         <button data-m="pl">${icon('plus')}Add to Playlist…</button>
         ${inPl ? `<button data-m="unpl">${icon('trash')}Remove from this Playlist</button>` : ''}
         <button data-m="del" class="danger">${icon('trash')}Delete from Library</button>
@@ -1057,7 +931,6 @@ const UI = {
         const m = e.target.closest('[data-m]')?.dataset.m; if (!m) return;
         if (m === 'next') { this.closeSheet(); Player.playNext(id); }
         if (m === 'queue') { this.closeSheet(); Player.addToQueue(id); }
-        if (m === 'deckA' || m === 'deckB') { this.closeSheet(); await loadToDeck(Engine.decks[m.slice(4)], id); this.setTab('mixer'); }
         if (m === 'pl') this.pickPlaylist(id);
         if (m === 'unpl') {
           const pl = Lib.playlists.find((p) => p.id === this.plId);
@@ -1148,8 +1021,10 @@ const UI = {
     if (Player.repeat === 'all') for (let i = 0; i < Player.qi; i++) { const t = Lib.tracks.get(Player.queue[i]); if (t) up.push([i, t]); }
     this.openSheet(`
       ${cur ? `<h3>Now Playing</h3><div class="sheet-head queue-now">${this.artHTML(cur)}<span class="row-text"><span class="t1">${esc(cur.title)}</span><span class="t2">${esc(cur.artist)}</span></span></div>` : ''}
-      <h3>Up Next ${settings.autoMix && settings.crossfade ? `<small style="font-size:13px;color:var(--muted);font-weight:500">· auto-mix ${settings.crossfade}s</small>` : ''}</h3>
+      <h3>Up Next</h3>
+      <div class="automix-row"><span><strong>AutoMix</strong><small>Blend each song into the next, like a DJ</small></span><label class="switch"><input type="checkbox" id="q-automix" ${settings.autoMix && settings.crossfade ? 'checked' : ''}><i></i></label></div>
       ${up.length ? `<div class="rows">${up.map(([i, t]) => `<div class="row" data-qi="${i}"><button class="row-main" data-q="jump">${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}${t.bpm ? ' · ' + Math.round(t.bpm) + ' BPM' : ''}</span></span></button><span class="row-meta"><button class="icon-btn" data-q="rm" aria-label="Remove">${icon('trash')}</button></span></div>`).join('')}</div>` : '<p class="count-note">Nothing queued</p>'}`, (b) => {
+      $('#q-automix', b).addEventListener('change', (e) => setAutoMix(e.target.checked));
       b.addEventListener('click', (e) => {
         const r = e.target.closest('[data-qi]'); const a = e.target.closest('[data-q]')?.dataset.q; if (!r || !a) return;
         const i = +r.dataset.qi;
@@ -1204,39 +1079,13 @@ const UI = {
       });
     });
   },
-  deckPicker(d) {
-    const all = Lib.sorted();
-    if (!all.length) { toast('Add music to your library first'); return; }
-    const other = Engine.other(d);
-    const ref = other.bpmNow;
-    this.openSheet(`<h3>Load to Deck ${d.id}${ref ? ` <small style="font-size:13px;color:var(--muted);font-weight:500">· Deck ${other.id} is at ${ref.toFixed(1)} BPM</small>` : ''}</h3>
-      <label class="search-box" style="margin-bottom:8px">${icon('search')}<input type="search" id="dp-q" placeholder="Search" autocomplete="off"></label>
-      <div class="rows" id="dp-list"></div>`, (b) => {
-      const list = $('#dp-list', b);
-      const draw = () => {
-        const q = $('#dp-q', b).value.trim().toLowerCase();
-        let ts = all.filter((t) => !q || [t.title, t.artist, t.album].some((s) => (s || '').toLowerCase().includes(q)));
-        if (ref) ts = ts.slice().sort((a, c) => Math.abs((a.bpm || 999) - ref) - Math.abs((c.bpm || 999) - ref));
-        list.innerHTML = ts.map((t) => `<div class="row" data-id="${esc(t.id)}"><button class="row-main" data-pick>${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}</span></span></button><span class="row-meta">${t.bpm ? `<span class="bpm-tag">${Math.round(t.bpm)} BPM</span>` : ''}</span></div>`).join('');
-        this.hydrateArt(list);
-      };
-      draw();
-      $('#dp-q', b).addEventListener('input', draw);
-      list.addEventListener('click', (e) => {
-        const r = e.target.closest('[data-id]'); if (!r) return;
-        this.closeSheet(); loadToDeck(d, r.dataset.id);
-      });
-    });
-  },
 };
 
-async function loadToDeck(d, id) {
-  const t = Lib.tracks.get(id); if (!t) return;
-  Engine.ensure();
-  if (Player.mixing && (Player.mixing.to === d || Player.mixing.from === d)) Engine.cancelAnim();
-  try { await d.load(t); toast(`Loaded to Deck ${d.id}`); } catch { toast('Couldn’t load this song'); }
-  if (!Player.live.track) { Player.live = d; Engine.applyX(Engine.sideOf(d), true); }
-  UI.deckState(); UI.nowPlaying();
+function setAutoMix(on) {
+  settings.autoMix = on;
+  if (on && !settings.crossfade) settings.crossfade = 6;
+  saveSettings(); UI.transport();
+  toast(on ? 'AutoMix on: songs will blend into each other' : 'AutoMix off', 1800);
 }
 
 function playList(ids, start, shuffle) {
@@ -1272,7 +1121,7 @@ const MediaSessionCtl = {
 };
 
 /* =========================================================================
- * Demo tracks — synthesized loops at different tempos, so the mixer can be tried without files
+ * Demo tracks — synthesized loops at different tempos, so AutoMix can be tried without files
  * ========================================================================= */
 const Demo = {
   defs: [
@@ -1344,7 +1193,7 @@ const Demo = {
         Lib.tracks.set(t.id, t); ids.push(t.id);
       }
     } catch (e) { console.error(e); toast('Couldn’t generate the demo tracks'); return; }
-    UI.render(); toast('Added 3 demo tracks. Play one and try mixing.');
+    UI.render(); toast('Added 3 demo tracks. Play one to hear AutoMix.');
     queueAnalysis(ids);
   },
 };
@@ -1362,9 +1211,9 @@ function wav(buf) {
 }
 
 /* =========================================================================
- * Visuals — progress, deck playheads, scope and spectrum
+ * Visuals — progress and spectrum
  * ========================================================================= */
-let vizData, scopeData;
+let vizData;
 function frame() {
   const d = Player.live;
   if (d.track) {
@@ -1376,40 +1225,8 @@ function frame() {
       $('#np-cur').textContent = fmt(t); $('#np-rem').textContent = '-' + fmt((dur - t) / (d.rate || 1));
     }
   }
-  if (UI.tab === 'mixer') {
-    for (const dk of Object.values(Engine.decks)) {
-      const el = $('#deck-' + dk.id); if (!el || !el.dataset.built) continue;
-      const dur = dk.duration;
-      $('.ph', el).style.left = (dur ? dk.time / dur * 100 : 0) + '%';
-      $('[data-s="time"]', el).textContent = fmt(dk.time);
-      $('[data-s="rem"]', el).textContent = '-' + fmt((dur - dk.time) / (dk.rate || 1));
-    }
-    const sx = $('#xfader');
-    if (document.activeElement !== sx || Engine.anim) sx.value = Math.round(Engine.xNow() * 1000);
-    drawScope();
-  }
   if (!$('#np-viz').hidden && $('#np').classList.contains('open')) drawViz();
   requestAnimationFrame(frame);
-}
-function drawScope() {
-  const c = $('#mx-scope'); if (!c.clientWidth) return;
-  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
-  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
-  const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
-  if (!Engine.ctx) return;
-  const cs = getComputedStyle(document.documentElement);
-  const cols = [cs.getPropertyValue('--deck-a'), cs.getPropertyValue('--deck-b')];
-  ['A', 'B'].forEach((k, i) => {
-    const m = Engine.decks[k].meter; if (!m) return;
-    scopeData = scopeData && scopeData.length === m.fftSize ? scopeData : new Uint8Array(m.fftSize);
-    m.getByteTimeDomainData(scopeData);
-    const gain = Engine.gains(Engine.xNow())[i];
-    g.strokeStyle = cols[i]; g.lineWidth = 1.6; g.globalAlpha = 0.25 + 0.75 * gain;
-    g.beginPath();
-    for (let j = 0; j < scopeData.length; j++) { const x = j / (scopeData.length - 1) * w, y = h / 2 + ((scopeData[j] - 128) / 128) * (h / 2 - 4) * (0.3 + gain * 0.7); j ? g.lineTo(x, y) : g.moveTo(x, y); }
-    g.stroke();
-  });
-  g.globalAlpha = 1;
 }
 function drawViz() {
   const c = $('#np-viz'); if (!Engine.analyser) return;
@@ -1441,7 +1258,6 @@ function drawViz() {
 function applyTheme() {
   const t = store.get('theme', 'auto');
   if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
-  setTimeout(() => { for (const d of Object.values(Engine.decks)) UI.drawWave(d); }, 30);
 }
 
 /* =========================================================================
@@ -1481,11 +1297,7 @@ function bind() {
   $('#pl-back').onclick = () => { UI.plId = null; UI.showView('playlists'); UI.renderPlaylists(); };
   $('#pl-more').onclick = () => UI.playlistMenu();
   $('#pl-play').onclick = () => playList(UI.currentListIds, 0, false);
-  $('#pl-mix').onclick = () => {
-    if (!settings.autoMix) { settings.autoMix = true; saveSettings(); }
-    if (!settings.crossfade) { settings.crossfade = 6; saveSettings(); }
-    playList(UI.currentListIds, 0, false); toast(`Auto-mix on · ${settings.crossfade}s`);
-  };
+  $('#pl-shuffle').onclick = () => playList(UI.currentListIds, 0, true);
   $('#pl-add-songs').onclick = () => { const pl = Lib.playlists.find((p) => p.id === UI.plId); if (pl) UI.pickSongs(pl); };
   $('#search-input').addEventListener('input', () => UI.renderSearch());
 
@@ -1500,7 +1312,7 @@ function bind() {
   $('#np-shuffle').onclick = () => Player.setShuffle(!Player.shuffle);
   $('#np-repeat').onclick = () => Player.cycleRepeat();
   $('#np-queue-btn').onclick = () => UI.queueSheet();
-  $('#np-xf-btn').onclick = () => UI.settingsSheet(true);
+  $('#np-xf-btn').onclick = () => setAutoMix(!(settings.autoMix && settings.crossfade > 0));
   $('#np-more').onclick = () => { if (Player.current) UI.trackMenu(Player.current.id); };
   $('#np-viz-btn').onclick = (e) => {
     const on = $('#np-viz').hidden; $('#np-viz').hidden = !on; $('#np-art').hidden = on;
@@ -1542,64 +1354,6 @@ function bind() {
     if (e.key === ' ' && !e.target.closest('input,textarea,button')) { e.preventDefault(); Player.toggle(); }
   });
 
-  // mixer
-  $('#mx-automix').onclick = () => { settings.autoMix = !settings.autoMix; saveSettings(); UI.transport(); toast(settings.autoMix ? `Auto-mix on · ${settings.crossfade || 0}s` : 'Auto-mix off'); };
-  const xf = $('#xfader');
-  xf.addEventListener('input', () => { Engine.ensure(); Engine.setX(xf.value / 1000); Player.followFader(); });
-  $('#xf-center').onclick = () => { Engine.ensure(); Engine.setX(0.5); };
-  $('#mx-mix-now').onclick = async () => {
-    Engine.ensure();
-    if (Player.mixing) return;
-    const from = Player.live, to = Engine.other(from);
-    const dur = Math.max(4, settings.crossfade || 6);
-    if (to.track) { if (!from.playing && !to.playing) { to.play(); } Player.mixing = { from, to, i: Math.max(0, Player.queue.indexOf(to.track.id)) }; const qi = Player.queue.indexOf(to.track.id); if (qi >= 0) Player.qi = qi; Player.startMix(from, to, dur); return; }
-    if (Player.hasNext()) { Player.mixTo(Player.nextIndex(), dur); return; }
-    UI.deckPicker(to);
-  };
-  ['A', 'B'].forEach((k) => {
-    const el = $('#deck-' + k), d = Engine.decks[k];
-    el.addEventListener('click', (e) => {
-      const a = e.target.closest('[data-dact]')?.dataset.dact; if (!a) return;
-      Engine.ensure();
-      if (a === 'load') UI.deckPicker(d);
-      if (a === 'play') {
-        if (!d.track) { UI.deckPicker(d); return; }
-        d.playing ? d.pause() : d.play();
-        if (!Player.live.track) Player.live = d;
-      }
-      if (a === 'cue') {
-        if (!d.track) return;
-        if (d.playing) { d.pause(); d.seek(d.cue); } else { d.cue = d.time; toast(`Cue set at ${fmt(d.cue)}`, 1200); }
-      }
-      if (a === 'sync') {
-        const o = Engine.other(d);
-        if (!d.track?.bpm || !o.track?.bpm) { toast('BPM isn’t detected yet'); return; }
-        let ratio = o.bpmNow / d.track.bpm;
-        if (ratio > 1.5) ratio /= 2; if (ratio < 0.67) ratio *= 2;
-        if (Math.abs(ratio - 1) > 0.16) { toast('Tempos are too far apart to sync'); return; }
-        d.setRate(ratio);
-        if (d.playing && o.playing) { let diff = d.phase() - o.phase(); diff -= Math.round(diff); d.seek(d.time - diff * 60 / d.track.bpm); }
-        toast(`Deck ${d.id} synced to ${o.bpmNow.toFixed(1)} BPM`, 1500);
-      }
-    });
-    el.addEventListener('input', (e) => {
-      const a = e.target.dataset.dact;
-      if (a === 'tempo') { d.setRate(1 + e.target.value / 1000); }
-      if (a === 'trim') { d.setTrim(e.target.value / 100); $('[data-s="trim"]', el).textContent = e.target.value; e.target.style.setProperty('--p', e.target.value + '%'); }
-    });
-    el.addEventListener('dblclick', (e) => { if (e.target.dataset.dact === 'tempo') d.setRate(1); });
-    // tap / drag on waveform to seek
-    el.addEventListener('pointerdown', (e) => {
-      const w = e.target.closest('[data-dact="wave"]'); if (!w || !d.track) return;
-      const r = w.getBoundingClientRect();
-      const go = (ev) => d.seek(clamp((ev.clientX - r.left) / r.width, 0, 1) * d.duration);
-      go(e); w.setPointerCapture(e.pointerId);
-      const mv = (ev) => go(ev);
-      const up = () => { w.removeEventListener('pointermove', mv); w.removeEventListener('pointerup', up); };
-      w.addEventListener('pointermove', mv); w.addEventListener('pointerup', up);
-    });
-  });
-  window.addEventListener('resize', () => { for (const d of Object.values(Engine.decks)) UI.drawWave(d); });
 
   // drag & drop files (desktop)
   window.addEventListener('dragover', (e) => e.preventDefault());
@@ -1618,11 +1372,10 @@ async function boot() {
   applyTheme();
   bind();
   MediaSessionCtl.init();
-  UI.renderDecks();
   try { await Lib.load(); } catch (e) { console.error(e); toast('Couldn’t open the library on this device. Private browsing may be on.'); }
   UI.render();
   const tab = store.get('tab', 'library');
-  UI.setTab(['library', 'playlists', 'mixer', 'search'].includes(tab) ? tab : 'library');
+  UI.setTab(['library', 'playlists', 'search'].includes(tab) ? tab : 'library');
   UI.transport();
   queueAnalysis([...Lib.tracks.values()].filter((t) => !t.peaks).map((t) => t.id));
   requestAnimationFrame(frame);

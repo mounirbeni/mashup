@@ -1,6 +1,6 @@
 # Mashup
 
-A phone-first music player in the style of modern music apps, with a **two-deck DJ mixer** and **automatic mixing** between songs. It runs entirely in the browser and can be installed to your home screen as an app (PWA).
+A phone-first music player in the style of modern music apps, with **AutoMix**: songs blend into each other automatically, like a DJ set. It runs entirely in the browser and can be installed to your home screen as an app (PWA).
 
 ## Features
 
@@ -11,12 +11,12 @@ A phone-first music player in the style of modern music apps, with a **two-deck 
 - Lock-screen and headphone controls (Media Session)
 - Reads MP3 tags (ID3): title, artist, album and cover art, including Arabic text stored as Windows-1256
 
-**Mixing**
-- **Auto-Mix:** the next song starts before the current one ends, overlapping for 0–12 seconds
-- **Smart Mix:** detects tempo (BPM), matches speed, lines up the beats, and swaps the bass halfway through
-- **Two decks (A / B):** tap-to-seek waveform, CUE, SYNC, 3-band EQ (HI / MID / LOW), low/high-pass filter, ±16% tempo with key lock, and per-deck volume
-- **Equal-power crossfader** and a "Mix to the Other Deck Now" button
-- Built-in demo tracks (122, 124 and 126 BPM) so you can try mixing without your own files
+**AutoMix**
+- Built into playback like Apple Music: as a song ends, the next one blends in automatically. There is no separate mixer screen.
+- Turn it on or off with the **AutoMix** button in Now Playing or the switch at the top of **Up Next**
+- Behind the scenes it detects each song's tempo (BPM), matches speeds, lines up the beats, and swaps the bass halfway through the blend
+- Blend length (0–12 s), smart beat-matching and key lock are in **Settings** (the gear icon in Library)
+- Built-in demo tracks (122, 124 and 126 BPM) let you hear it without your own files
 
 ## Using it on your phone
 
@@ -45,6 +45,6 @@ sw.js                 Offline support
 manifest.webmanifest  Install-as-app settings
 ```
 
-Signal path for each deck:
+Audio path (two players run in the background so one song can fade into the next):
 
 `<audio> → EQ (low-shelf / peaking / high-shelf) → filter → deck volume → crossfader → master → limiter → output`
