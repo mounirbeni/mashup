@@ -224,7 +224,21 @@ const Tags = (() => {
 /* =========================================================================
  * Analysis — waveform peaks, BPM and first-beat offset
  * ========================================================================= */
-const GRID_V = 3;
+const GRID_V = 4; // 4: adds the musical key
+const KEY_MIN = 0.03; // below this margin the key is a guess and is ignored
+/* Distance between two keys on the Camelot wheel, as DJs use it for harmonic mixing:
+ * 0 same key · 1 neighbour (±1 on the wheel, or relative major/minor) · 2 two steps · 3 clash · null unknown */
+function keyDistance(a, b) {
+  if (!a?.key || !b?.key || (a.keyConf ?? 0) < KEY_MIN || (b.keyConf ?? 0) < KEY_MIN) return null;
+  const pa = /^(\d+)([AB])$/.exec(a.key), pb = /^(\d+)([AB])$/.exec(b.key);
+  if (!pa || !pb) return null;
+  const na = +pa[1], nb = +pb[1], d = Math.min((na - nb + 12) % 12, (nb - na + 12) % 12);
+  if (na === nb && pa[2] === pb[2]) return 0;
+  if (na === nb) return 1;
+  if (pa[2] === pb[2] && d === 1) return 1;
+  if (pa[2] === pb[2] && d === 2) return 2;
+  return 3;
+}
 const FIT_MIN = 2; // songs whose beats stand out less than this are never beat-matched
 const ONSET_LAG = 0; // seconds between a beat and where its onset shows in the envelope (calibrated by test)
 const Analysis = (() => {
@@ -419,17 +433,84 @@ const Analysis = (() => {
     beatOffset = ((beatOffset % bar) + bar) % bar;
     return { bpm, beatOffset, conf: Math.round(fit * 100) / 100, kickShift: kHalf > kOn * 1.25, downbeat: db };
   }
+  /* ---- musical key ----
+   * chromagram (how strongly each of the 12 notes sounds through the song), compared with the
+   * Krumhansl–Kessler profiles of the 24 major / minor keys; the best match is the key. */
+  function fft(re, im) { // in-place radix-2
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) { let bit = n >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; } }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let j = 0; j < len / 2; j++) {
+          const a = i + j, b = a + len / 2, tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+          re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+          const nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr;
+        }
+      }
+    }
+  }
+  // Albrecht & Shanahan (2013) key profiles, derived from a corpus of real music
+  const MAJ = [0.238, 0.006, 0.111, 0.006, 0.137, 0.094, 0.016, 0.214, 0.009, 0.080, 0.008, 0.081];
+  const MIN = [0.220, 0.006, 0.104, 0.123, 0.019, 0.103, 0.012, 0.214, 0.062, 0.022, 0.061, 0.052];
+  const NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+  function corr(a, b) {
+    const ma = a.reduce((s, v) => s + v, 0) / 12, mb = b.reduce((s, v) => s + v, 0) / 12;
+    let n = 0, da = 0, db = 0; for (let i = 0; i < 12; i++) { n += (a[i] - ma) * (b[i] - mb); da += (a[i] - ma) ** 2; db += (b[i] - mb) ** 2; }
+    return n / Math.sqrt(da * db + 1e-12);
+  }
+  function camelot(pc, minor) {
+    const majorPc = minor ? (pc + 3) % 12 : pc;          // a minor key shares its number with its relative major
+    return `${((majorPc * 7) % 12 + 7) % 12 + 1}${minor ? 'A' : 'B'}`;
+  }
+  function key(buf) {
+    const nch = buf.numberOfChannels, len = buf.length, D = Math.max(1, Math.round(buf.sampleRate / 11025));
+    const sr = buf.sampleRate / D, N = 4096, chs = []; for (let c = 0; c < nch; c++) chs.push(buf.getChannelData(c));
+    // mono, decimated to ~11 kHz (simple averaging is enough below 2 kHz, where the notes are read)
+    const m = new Float32Array(Math.floor(len / D));
+    for (let i = 0; i < m.length; i++) { let s = 0; const o = i * D; for (const x of chs) for (let j = 0; j < D; j++) s += x[o + j]; m[i] = s / (D * nch); }
+    // which note each FFT bin belongs to, for 55 Hz – 2 kHz
+    const pcOf = new Int8Array(N / 2).fill(-1);
+    for (let k = 1; k < N / 2; k++) { const f = k * sr / N; if (f >= 55 && f <= 2000) pcOf[k] = ((Math.round(12 * Math.log2(f / 440) + 69) % 12) + 12) % 12; }
+    const win = new Float32Array(N); for (let j = 0; j < N; j++) win[j] = 0.5 - 0.5 * Math.cos(2 * Math.PI * j / N);
+    const chroma = new Float64Array(12), re = new Float32Array(N), im = new Float32Array(N);
+    let frames = 0;
+    for (let o = 0; o + N <= m.length; o += N) {
+      for (let j = 0; j < N; j++) { re[j] = m[o + j] * win[j]; im[j] = 0; }
+      fft(re, im);
+      const c = new Float64Array(12); let mx = 0;
+      for (let k = 1; k < N / 2; k++) {
+        const p = pcOf[k]; if (p < 0) continue;
+        const mag = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+        c[p] += mag;
+      }
+      for (let i = 0; i < 12; i++) mx = Math.max(mx, c[i]);
+      if (mx < 1e-4) continue;                                 // skip silence
+      for (let i = 0; i < 12; i++) chroma[i] += c[i] / mx;     // every moment counts equally, loud or quiet
+      frames++;
+    }
+    if (frames < 8) return null;
+    const scores = [];
+    for (let pc = 0; pc < 12; pc++) {
+      const rot = (p) => Array.from({ length: 12 }, (_, i) => p[(i - pc + 12) % 12]);
+      scores.push({ pc, minor: false, r: corr(chroma, rot(MAJ)) }, { pc, minor: true, r: corr(chroma, rot(MIN)) });
+    }
+    scores.sort((a, b) => b.r - a.r);
+    const best = scores[0];
+    return { key: camelot(best.pc, best.minor), keyName: NAMES[best.pc] + (best.minor ? 'm' : ''), keyConf: Math.round((best.r - scores[1].r) * 1000) / 1000, keyR: Math.round(best.r * 100) / 100 };
+  }
   async function run(blob, hint) {
     const buf = await decode(await blob.arrayBuffer());
     const ch = buf.getChannelData(0);
-    const g = grid(ch, buf.sampleRate, hint);
-    return { duration: buf.duration, bpm: g?.bpm, beatOffset: g?.beatOffset, beatConf: g?.conf ?? 0, gridV: GRID_V };
+    const g = grid(ch, buf.sampleRate, hint), k = key(buf);
+    return { duration: buf.duration, bpm: g?.bpm, beatOffset: g?.beatOffset, beatConf: g?.conf ?? 0, gridV: GRID_V, key: k?.key, keyName: k?.keyName, keyConf: k?.keyConf };
   }
   function fromBuffer(buf, hint) {
-    const g = grid(buf.getChannelData(0), buf.sampleRate, hint);
-    return { bpm: g?.bpm, beatOffset: g?.beatOffset, beatConf: g?.conf ?? 0, gridV: GRID_V };
+    const g = grid(buf.getChannelData(0), buf.sampleRate, hint), k = key(buf);
+    return { bpm: g?.bpm, beatOffset: g?.beatOffset, beatConf: g?.conf ?? 0, gridV: GRID_V, key: k?.key, keyName: k?.keyName, keyConf: k?.keyConf };
   }
-  return { run, fromBuffer, grid };
+  return { run, fromBuffer, grid, key };
 })();
 
 /* =========================================================================
@@ -539,7 +620,7 @@ async function addFiles(files) {
       await uploadTrack({
         id, fileName: f.name, title, artist: artist || 'Unknown Artist', album: tags.album || '',
         duration: dur || a?.duration || 0, bpm: a?.bpm || tags.bpm || null, beatOffset: a?.beatOffset ?? null,
-        beatConf: a?.beatConf ?? null, gridV: a ? GRID_V : null, analyzed: !!a, addedAt: Date.now(),
+        beatConf: a?.beatConf ?? null, gridV: a ? GRID_V : null, key: a?.key || null, keyName: a?.keyName || null, keyConf: a?.keyConf ?? null, analyzed: !!a, addedAt: Date.now(),
       }, f, tags.art, label);
       // lyrics stored inside the file are kept, so they show without a search
       if (tags.lyrics) await Api.call('/api/lyrics?id=' + id, { method: 'POST', body: JSON.stringify({ text: tags.lyrics, source: 'file' }) }).catch(() => {});
@@ -907,7 +988,7 @@ function analyzeIfNeeded(track, buf) {
   setTimeout(() => {
     try {
       const r = Analysis.fromBuffer(buf, track.bpm);
-      const patch = { analyzed: true, gridV: GRID_V, beatConf: r.beatConf };
+      const patch = { analyzed: true, gridV: GRID_V, beatConf: r.beatConf, key: r.key || null, keyName: r.keyName || null, keyConf: r.keyConf ?? null };
       if (r.bpm) patch.bpm = r.bpm;
       if (r.beatOffset != null) patch.beatOffset = r.beatOffset;
       Object.assign(track, patch);
@@ -1011,8 +1092,9 @@ const Player = {
   live: Engine.decks.A, mixing: null,
   get current() { return this.live.track; },
   get playing() { return this.live.playing; },
-  setQueue(ids, start = 0, { shuffle = false } = {}) {
+  setQueue(ids, start = 0, { shuffle = false, album = false } = {}) {
     this.original = ids.slice();
+    this.albumMode = !!album && !shuffle;
     if (shuffle) {
       const rest = ids.slice(); const first = rest.splice(Math.floor(Math.random() * rest.length), 1)[0];
       this.queue = [first, ...shuffleArr(rest)]; this.qi = 0; this.shuffle = true;
@@ -1024,7 +1106,7 @@ const Player = {
     const t = Lib.tracks.get(id);
     if (!t) return;
     Engine.ensure();
-    const canMix = mix && settings.crossfade > 0 && this.live.playing && this.live.track;
+    const canMix = mix && !this.albumMode && settings.crossfade > 0 && this.live.playing && this.live.track;
     if (canMix) return this.mixTo(i, { quick: true });
     this.cancelMix();
     const deck = this.live, other = Engine.other(deck);
@@ -1065,9 +1147,14 @@ const Player = {
     if (!pool.length) pool = [...Lib.tracks.values()].filter((t) => t.id !== cur?.id);
     if (!pool.length) return false;
     const dist = (t) => {
-      if (!cur?.bpm || !t.bpm) return 1;
-      const r = t.bpm / cur.bpm;
-      return Math.min(...[r, r * 2, r / 2].map((x) => Math.abs(Math.log2(x)))); // half/double time count as close
+      let d = 1;
+      if (cur?.bpm && t.bpm) {
+        const r = t.bpm / cur.bpm;
+        d = Math.min(...[r, r * 2, r / 2].map((x) => Math.abs(Math.log2(x)))); // half/double time count as close
+        if (d > Math.log2(1.22)) d += 0.3;                                     // too far apart to beat-match
+      }
+      const kd = keyDistance(cur, t);                                          // harmonic fit (Camelot wheel)
+      return d + [0, 0.015, 0.04, 0.09][kd ?? 1];
     };
     pool.sort((a, b) => dist(a) - dist(b) || Math.random() - 0.5);
     const pick = pool[Math.floor(Math.random() * Math.min(2, pool.length))]; // a little variety among the closest
@@ -1098,6 +1185,7 @@ const Player = {
     this.qi = Math.max(-1, this.queue.indexOf(cur));
   },
   setShuffle(on) {
+    if (on) this.albumMode = false; // a shuffled album isn't heard in order any more, so it can mix
     const cur = this.queue[this.qi];
     if (on) { const rest = this.queue.filter((_, i) => i !== this.qi); this.queue = cur ? [cur, ...shuffleArr(rest)] : shuffleArr(rest); this.qi = cur ? 0 : -1; }
     else { this.queue = this.original.slice(); this.qi = this.queue.indexOf(cur); }
@@ -1140,6 +1228,9 @@ const Player = {
    * fade:  one of the songs has no reliable beat → a smooth crossfade with a bass swap, no
    *        stretching and no alignment (nothing to align to). */
   plan(from, toTrack) {
+    if (this.albumMode && toTrack && from.track?.album && toTrack.album === from.track.album && toTrack.id !== from.track.id) {
+      return { start: Math.max(0, from.duration - 0.03), len: 0.03, style: 'gapless' };
+    }
     const out = from.points?.mixOut || from.duration;
     const t = from.track, beat = t?.bpm ? 60 / t.bpm : 0, bar = beat * 4;
     const match = this.tempoMatch(from, toTrack);
@@ -1147,6 +1238,8 @@ const Player = {
     if (match || !settings.smartMix) { // with Smart Mix off: a plain crossfade of the chosen length
       style = 'blend'; len = settings.crossfade;
       if (bar) len = Math.max(2, Math.round(len / bar)) * bar;
+      // keys that clash: keep the overlap short (2 bars) so the two melodies are heard together only briefly
+      if (settings.smartMix && keyDistance(t, toTrack) === 3) len = Math.min(len, bar ? bar * 2 : 4);
     } else if (!this.beatReliable(t) || !this.beatReliable(toTrack)) {
       style = 'fade';
       len = Math.min(settings.crossfade, 8);
@@ -1217,7 +1310,10 @@ const Player = {
       start += (beats - Math.floor(beats)) * 60 / to.track.bpm;
     }
     start = Math.min(start, Math.max(0, to.duration - dur * 1.3 - 1));
-    if (separated) {
+    if (style === 'gapless') start = 0;
+    if (style === 'gapless') {
+      to.seek(0); to.play(when);
+    } else if (separated) {
       // echo-out: the old song's last beat repeats as a filtered, tempo-synced echo and rings out,
       // while it fades; the new song starts as its fade-in begins, so its first beat is heard
       const beat = from.track?.bpm ? 60 / from.track.bpm / from.rate : 0.5;
@@ -1248,7 +1344,7 @@ const Player = {
         f.cancelScheduledValues(0); f.setValueAtTime(22000, ctx.currentTime); f.setValueAtTime(22000, mid); f.exponentialRampToValueAtTime(700, when + dur);
       }
     }
-    const handover = () => { if (this.mixing?.to !== to) return; this.live = to; UI.nowPlaying(); UI.mixState(true); };
+    const handover = () => { if (this.mixing?.to !== to) return; this.live = to; UI.nowPlaying(); if (style !== 'gapless') UI.mixState(true); };
     if (when - ctx.currentTime > 0.1) setTimeout(handover, (when - ctx.currentTime) * 1000); else handover();
     Engine.fadeTo(Engine.sideOf(to), dur, () => {
       from.pause();
@@ -1611,7 +1707,7 @@ const UI = {
     const t = Lib.tracks.get(id); if (!t) return;
     const inPl = ctx === 'pl' && this.plId && this.plId !== '__fav';
     this.openSheet(`
-      <div class="sheet-head">${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}${t.bpm ? ` · ${Math.round(t.bpm)} BPM` : ''}</span></span></div>
+      <div class="sheet-head">${this.artHTML(t)}<span class="row-text"><span class="t1">${esc(t.title)}</span><span class="t2">${esc(t.artist)}${t.bpm ? ` · ${Math.round(t.bpm)} BPM` : ''}${t.key && (t.keyConf ?? 0) >= KEY_MIN ? ` · ${t.key} (${esc(t.keyName || '')})` : ''}</span></span></div>
       <div class="menu">
         <button data-m="next">${icon('queue')}Play Next</button>
         <button data-m="queue">${icon('list')}Add to Queue</button>
@@ -1718,7 +1814,7 @@ const UI = {
     if (Player.repeat === 'all') for (let i = 0; i < Player.qi; i++) { const t = Lib.tracks.get(Player.queue[i]); if (t) up.push([i, t]); }
     this.openSheet(`
       ${cur ? `<h3>Now Playing</h3><div class="sheet-head queue-now">${this.artHTML(cur)}<span class="row-text"><span class="t1">${esc(cur.title)}</span><span class="t2">${esc(cur.artist)}</span></span></div>` : ''}
-      <div class="q-head"><h3>Up Next</h3><span class="q-sub">${settings.autoMix && settings.crossfade ? 'Songs blend into each other' : 'Songs play back to back'}${settings.autoplay ? ' · Autoplay on' : ''}</span></div>
+      <div class="q-head"><h3>Up Next</h3><span class="q-sub">${Player.albumMode ? 'Album · plays in order without transitions' : settings.autoMix && settings.crossfade ? 'Songs blend into each other' : 'Songs play back to back'}${settings.autoplay ? ' · Autoplay on' : ''}</span></div>
       <div class="q-toggles">
         <button class="q-tog" id="q-shuffle" aria-pressed="${Player.shuffle}" aria-label="Shuffle">${icon('shuffle')}</button>
         <button class="q-tog" id="q-repeat" aria-pressed="${Player.repeat !== 'off'}" aria-label="Repeat">${icon('repeat')}<b ${Player.repeat === 'one' ? '' : 'hidden'}>1</b></button>
@@ -1807,10 +1903,10 @@ function setAutoMix(on) {
   toast(on ? 'AutoMix on: songs will blend into each other' : 'AutoMix off', 1800);
 }
 
-function playList(ids, start, shuffle) {
+function playList(ids, start, shuffle, opts = {}) {
   if (!ids.length) return;
   Engine.ensure();
-  Player.setQueue(ids, start, { shuffle });
+  Player.setQueue(ids, start, { shuffle, album: opts.album });
   Player.playIndex(Player.qi);
 }
 
@@ -2264,7 +2360,9 @@ function bind() {
     const act = a.dataset.act, row = a.closest('[data-id]');
     if (act === 'play' && row) {
       const ids = UI.currentListIds.length && UI.currentListIds.includes(row.dataset.id) ? UI.currentListIds : [row.dataset.id];
-      playList(ids, ids.indexOf(row.dataset.id), false);
+      // playing from an album: its songs follow each other gaplessly, in order, like the record
+      const album = ids === UI.currentListIds && UI.tab === 'library' && UI.filter?.type === 'album';
+      playList(ids, ids.indexOf(row.dataset.id), false, { album });
     }
     if (act === 'menu' && row) UI.trackMenu(row.dataset.id, $('[data-ctx]', row)?.dataset.ctx);
     if (act === 'filter') { UI.filter = { type: a.dataset.type, value: a.dataset.value }; UI.renderLibrary(); $('#views').scrollTop = 0; }
